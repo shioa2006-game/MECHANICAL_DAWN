@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>MECHANICAL DAWN — 機械都市の夜明け</title>
+  <meta name="description" content="10歩しか動けない小さな探索ロボットが、足跡を送電網として残し、止まった機械都市を再生させるゲーム。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="ui" class="hidden">
+    <header id="hud">
+      <div class="hud-block" id="hud-battery">
+        <div class="label"><span class="k">BATTERY</span> <span id="mode-text">基地で待機</span></div>
+        <div id="pips"></div>
+        <div class="sub"><span id="bat-num">10/10</span><button id="btn-return" class="mini" title="基地へ帰還して充電 [R]">帰還 R</button></div>
+      </div>
+      <div class="hud-block" id="hud-res">
+        <div class="res" title="スクラップ：施設の復旧・ロボット製造・強化に使う"><i class="ico scrap"></i><b id="r-scrap">0</b><small id="r-scrap-rate"></small></div>
+        <div class="res" title="結晶：高度な強化と変電所・中央動力炉の復旧に使う"><i class="ico crystal"></i><b id="r-crystal">0</b><small id="r-crystal-rate"></small></div>
+        <div class="res" title="電力：同時に動かせるロボットの数"><i class="ico power"></i><b id="r-power">0/2</b><small>ロボ枠</small></div>
+      </div>
+      <div class="hud-block" id="hud-dawn">
+        <div class="label"><span class="k">都市復旧</span> <b id="dawn-num">0%</b></div>
+        <div id="dawn-bar"><div id="dawn-fill"></div><div id="dawn-sun"></div></div>
+        <div class="sub"><span id="clock">0:00</span> ・ 出撃 <span id="sorties">0</span> 回</div>
+      </div>
+      <div id="hud-buttons">
+        <button id="btn-speed" title="ゲーム速度（ロボットの作業を早送り）">×1</button>
+        <button id="btn-sound" title="サウンド [M]">♪</button>
+        <button id="btn-help" title="遊び方 [H]">?</button>
+        <button id="btn-menu" title="メニュー [Esc]">≡</button>
+      </div>
+    </header>
+
+    <section id="objective">
+      <div class="obj-head">次の目標</div>
+      <div class="obj-title" id="obj-title"></div>
+      <div class="obj-text" id="obj-text"></div>
+      <ul id="obj-hints"></ul>
+    </section>
+
+    <aside id="side">
+      <button id="side-toggle">ロボット／強化 ▲</button>
+      <div class="panel" id="panel-robots">
+        <h3>ロボット <span id="robot-cap"></span></h3>
+        <div id="robot-rows"></div>
+        <div class="note" id="robot-note"></div>
+      </div>
+      <div class="panel" id="panel-upgrades">
+        <h3>ホタル強化</h3>
+        <div id="upgrade-rows"></div>
+      </div>
+    </aside>
+
+    <div id="card" class="hidden"></div>
+    <div id="tooltip" class="hidden"></div>
+    <div id="toasts"></div>
+    <div id="banner" class="hidden"><div class="b1"></div><div class="b2"></div></div>
+    <div id="logbox" class="hidden"></div>
+    <div id="mapbox">
+      <canvas id="minimap"></canvas>
+      <div id="zoom-ctl">
+        <button id="z-in" title="ズームイン [E / ホイール]">＋</button>
+        <button id="z-out" title="ズームアウト [Q / ホイール]">－</button>
+        <button id="z-home" title="ホタルを画面中央に [Space]">◎</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="title" class="screen">
+    <div class="title-wrap">
+      <div class="t-small">— A TEN-STEP CITY RESTORATION —</div>
+      <h1 class="t-main">MECHANICAL<br>DAWN</h1>
+      <div class="t-sub">機械都市の夜明け</div>
+      <div class="t-buttons">
+        <button id="btn-new" class="big">はじめから</button>
+        <button id="btn-continue" class="big hidden">つづきから</button>
+        <button id="btn-title-help" class="big ghost">遊び方</button>
+      </div>
+      <div class="t-foot">推奨：PCブラウザ（キーボード＋マウス）／ 音が出ます</div>
+    </div>
+  </div>
+
+  <div id="intro" class="screen hidden">
+    <div id="intro-lines"></div>
+    <div class="intro-skip">クリックで進む</div>
+  </div>
+
+  <div id="help" class="screen hidden">
+    <div class="sheet">
+      <h2>遊び方</h2>
+      <div class="cols">
+        <div>
+          <h4>探索ロボ〈ホタル〉</h4>
+          <ul>
+            <li><b>WASD / 矢印キー</b>で1歩ずつ、<b>クリック</b>で目的地へ移動。</li>
+            <li>新しい地面を1歩進むたびに<b>バッテリーを1消費</b>し、足跡が<b>送電ケーブル</b>として残る。</li>
+            <li>ケーブルの上は<b>バッテリーなし</b>で高速移動できる。ケーブルの先から続きを伸ばそう。</li>
+            <li>バッテリーが尽きると自動で基地へ帰還して充電（<b>R</b>で手動帰還）。</li>
+            <li>マウスを乗せると経路と消費バッテリーを表示。</li>
+          </ul>
+          <h4>送電網</h4>
+          <ul>
+            <li>施設や資源に<b>ケーブルを隣接</b>させると接続される。</li>
+            <li>街に眠る<b>古い送電線</b>に触れると、断線までの区間が一気に復活する。</li>
+            <li>ロボットは<b>送電網の上しか動けない</b>。網の形が物流の速さを決める。</li>
+          </ul>
+        </div>
+        <div>
+          <h4>ロボットと復旧</h4>
+          <ul>
+            <li>工場を再起動するとロボットを作れる。右パネルの<b>＋／−</b>で役割を変更。</li>
+            <li>採掘ロボが掘った資源は、<b>運搬ロボ</b>が基地へ運ぶまで使えない。</li>
+            <li>施設の復旧作業や<b>断線（火花）</b>の修理は<b>修理ロボ</b>の仕事。</li>
+            <li>変電所を復旧すると<b>電力（ロボット枠）</b>と<b>バッテリー</b>が増える。</li>
+          </ul>
+          <h4>クリア条件</h4>
+          <ul>
+            <li>3つの変電所を復旧し、<b>中央動力炉</b>を再起動。最後はホタルで点火しよう。</li>
+          </ul>
+          <h4>その他の操作</h4>
+          <ul>
+            <li>ドラッグ：視点移動 ／ ホイール・Q/E：ズーム ／ Space：ホタルへ</li>
+            <li>M：音 ／ Esc：メニュー ／ 進行は自動保存</li>
+          </ul>
+        </div>
+      </div>
+      <button id="btn-help-close" class="big">閉じる</button>
+    </div>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <div class="sheet small">
+      <h2>メニュー</h2>
+      <button id="btn-resume" class="big">ゲームに戻る</button>
+      <button id="btn-pause-help" class="big ghost">遊び方</button>
+      <button id="btn-restart" class="big ghost">最初からやり直す</button>
+      <button id="btn-to-title" class="big ghost">タイトルへ</button>
+    </div>
+  </div>
+
+  <div id="ending" class="screen hidden">
+    <div class="sheet end">
+      <div class="t-small">THE CITY IS AWAKE</div>
+      <h2 class="end-title">夜明け</h2>
+      <p class="end-text">10歩ぶんの電力から始まった足跡は、街じゅうを走る送電網になった。<br>機械都市は、ふたたび動き出す。</p>
+      <div id="end-stats"></div>
+      <div class="t-buttons">
+        <button id="btn-watch" class="big">街を眺める</button>
+        <button id="btn-end-title" class="big ghost">タイトルへ</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/core/util.js"></script>
+  <script src="js/core/data.js"></script>
+  <script src="js/core/game.js"></script>
+  <script src="js/core/robots.js"></script>
+  <script src="js/view/sprites.js"></script>
+  <script src="js/view/render.js"></script>
+  <script src="js/view/audio.js"></script>
+  <script src="js/view/ui.js"></script>
+  <script src="js/view/input.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
