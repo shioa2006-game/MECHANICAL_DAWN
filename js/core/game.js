@@ -315,7 +315,8 @@
   // volt[i] is the reach left at tile i: powered when >= 0, NO_VOLT when no source reaches it at all.
   const NO_VOLT = -99;
   G.NO_VOLT = NO_VOLT;
-  G.sourceReach = (f) => (f.state === 'active' && G.def(f).reach) || 0;
+  // A surge-damaged substation keeps carrying power along the grid; it only stops generating.
+  G.sourceReach = (f) => ((f.state === 'active' || f.damaged) && G.def(f).reach) || 0;
   const lossOf = (s, i) => (s.old[i] === 1 ? 0 : 1);
 
   function computeVolt(s, relays) {
@@ -634,6 +635,28 @@
     s.tripT = BAL.tripTime;
     s.stats.trips = (s.stats.trips || 0) + 1;
     s.events.push({ type: 'short', x: i % s.W, y: (i / s.W) | 0, tiles: e.temp.slice() });
+    surge(s, i);
+  }
+
+  // The surge runs back up the grid and knocks out the closest working generator or substation:
+  // it stops generating until repair robots fix it, so the mistake stays on the map.
+  function surge(s, i) {
+    const x = i % s.W, y = (i / s.W) | 0;
+    let best = null, bd = Infinity;
+    for (const f of s.facilities) {
+      if (f.state !== 'active' || (f.kind !== 'generator' && f.kind !== 'substation')) continue;
+      const d = Math.hypot(f.x + f.w / 2 - x, f.y + f.h / 2 - y);
+      if (d < bd) { bd = d; best = f; }
+    }
+    if (!best) return;
+    const lost = G.supplyOf(s, best);
+    best.state = 'restoring';
+    best.damaged = true;
+    best.work = 0;
+    best.need = BAL.surgeRepair;
+    s.stats.damaged = (s.stats.damaged || 0) + 1;
+    s.events.push({ type: 'surge', fac: best.id, lost });
+    s.restoration = G.computeRestoration(s);
   }
 
   function recall(s) {
@@ -870,8 +893,15 @@
 
   G.activate = function (s, f) {
     const def = G.def(f);
+    const repaired = !!f.damaged; // back from surge damage: only the generation returns
+    f.damaged = false;
     f.state = 'active';
     f.activatedAt = s.time;
+    if (repaired) {
+      s.events.push({ type: 'repaired', fac: f.id });
+      s.restoration = G.computeRestoration(s);
+      return;
+    }
     if (def.light) for (const k in def.light) s.districtLight[k] = Math.min(1, s.districtLight[k] + def.light[k]);
     const e = s.ex;
     if (def.battery) {
@@ -1086,6 +1116,13 @@
     }
     updateExplorer(s, dt);
     s.sat = G.satisfaction(s); // after the explorer, so a short circuit stops the city this very tick
+    // announce the moment the city starts (and stops) running short of power
+    const short = !s.tripT && G.coverage(s) < 1;
+    if (short !== !!s.brownout) {
+      s.brownout = short;
+      if (short) s.stats.brownouts = (s.stats.brownouts || 0) + 1;
+      s.events.push(short ? { type: 'brownout', speed: s.sat, supply: G.supply(s), demand: G.demand(s) } : { type: 'brownoutEnd' });
+    }
     MD.Robots.update(s, dt, s.sat);
     // Dock recycler: a slow trickle that only runs when scrap is short, so the game can never soft-lock.
     const floor = G.factory(s).state === 'active' ? Math.max(BAL.robotCost.scrap, MD.FAC.G.cost.scrap) : MD.FAC.F.cost.scrap;

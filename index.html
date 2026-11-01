@@ -23,7 +23,7 @@
       <div class="hud-block" id="hud-res">
         <div class="res" title="スクラップ：施設の復旧・ロボット製造・強化に使う"><i class="ico scrap"></i><b id="r-scrap">0</b><small id="r-scrap-rate"></small></div>
         <div class="res" title="結晶：高度な強化と変電所・中央動力炉の復旧に使う"><i class="ico crystal"></i><b id="r-crystal">0</b><small id="r-crystal-rate"></small></div>
-        <div class="res" id="res-power" title="電力"><i class="ico power"></i><b id="r-power">3</b><small id="r-power-sub">発電</small></div>
+        <div class="res power" id="res-power" title="電力"><i class="ico power"></i><div class="pw"><div class="pw-top"><b id="r-power">3</b><small id="r-power-sub">使用/発電</small></div><div id="power-bar"><i id="power-fill"></i></div></div></div>
       </div>
       <div class="hud-block" id="hud-dawn">
         <div class="label"><span class="k">都市復旧</span> <b id="dawn-num">0%</b></div>
@@ -124,7 +124,7 @@
           <ul>
             <li>基地・<b>発電機</b>・<b>変電所</b>が発電し、ロボット（採掘・運搬⚡1、修理⚡2）・中継塔・コンベヤーが電気を使う。</li>
             <li>使う量が発電量を超えると<b>都市全体の作業が遅くなる</b>（足りないほど急に遅くなる）。発電所を探して復旧すると都市が一気に元気になる。</li>
-            <li>ホタルの充電は電力を使わない。漏電床で過放電すると、<b>送電網全体が10秒停電</b>する。</li>
+            <li>ホタルの充電は電力を使わない。漏電床で過放電すると、サージが逆流して<b>近くの発電機か変電所が壊れる</b>（修理ロボが直すまで発電が止まる）。</li>
           </ul>
           <h4>ロボットと復旧</h4>
           <ul>

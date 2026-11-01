@@ -82,11 +82,12 @@
     conveyorInterval: 1.1,
     conveyorSpeed: 1.7,
     cellBonus: 1,
-    relayReach: 12,
+    relayReach: 12,         // tiles of new cable a relay tower pushes power through (see FAC reach)
     upkeep: { scrap: 1, crystal: 1, haul: 1, repair: 2, idle: 0 }, // power each robot role draws
     relayUpkeep: 1,
     conveyorUpkeep: 2,
-    tripTime: 10,           // seconds the whole grid stays dark after an overdraw on a live floor         // tiles of new cable a relay tower pushes power through (see FAC reach)
+    tripTime: 3,            // seconds the whole grid stays dark after an overdraw on a live floor
+    surgeRepair: 10,        // repair work to fix the generator a surge knocks out
     relayCost: 8, relayStep: 4, // scrap for the first relay tower, + per tower already built
     hazardRate: 0.18,       // chance for an eligible street tile to be a live floor
     hazardSafeRadius: 6,    // no live floors this close to the dock (Manhattan)

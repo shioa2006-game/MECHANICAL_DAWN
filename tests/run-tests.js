@@ -418,6 +418,36 @@ test('live floors are placed only on plain streets away from the dock and from g
   }
 });
 
+test('the surge knocks out the nearest generator until repair robots fix it', () => {
+  const s = setupFactory();
+  s.res.scrap = 99;
+  G.orderRestore(s, fac(s, 'F').id);
+  s.cable[idx(s, 5, 21)] = 1; s.cable[idx(s, 4, 21)] = 1; G.recomputeGrid(s, true); // a line to the west generator
+  const g = fac(s, 'G'); ok(g.connected); G.orderRestore(s, g.id);
+  const sub = fac(s, '1'); sub.connected = true; G.activate(s, sub);
+  const light = s.districtLight.sw, before = G.supply(s);
+  G.cmdMoveTo(s, 12, 20); run(s, 3);
+  s.hz[idx(s, 12, 21)] = 1; s.ex.battery = 2;
+  walk(s, [[12, 21]]);
+  ok(g.damaged && g.state === 'restoring', 'the west generator is closer than the substation');
+  eq(sub.state, 'active');
+  eq(G.supply(s), before - MD.FAC.G.power);
+  G.requestRole(s, 'repair');
+  run(s, BAL.tripTime + BAL.surgeRepair * 3);
+  eq(g.state, 'active'); ok(!g.damaged);
+  eq(G.supply(s), before, 'generation back after the repair');
+  eq(s.districtLight.sw, light, 'a repair does not count as a new restoration');
+});
+test('a damaged substation stops generating but still carries power along the grid', () => {
+  const s = fresh();
+  const sub = fac(s, '1'); sub.connected = true; G.activate(s, sub);
+  const i = idx(s, 41, 24);
+  sub.state = 'restoring'; sub.damaged = true; sub.work = 0; sub.need = BAL.surgeRepair;
+  G.recomputeGrid(s, true);
+  eq(s.powered[i], 1, 'reach kept');
+  eq(G.supplyOf(s, sub), 0, 'no generation');
+});
+
 console.log('\nPower reach & relay towers');
 function trailToRow13(s) {
   s.ex.battery = 99;

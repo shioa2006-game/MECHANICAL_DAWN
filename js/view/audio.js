@@ -130,6 +130,15 @@
       for (let k = 0; k < 9; k++) noise(t + k * 0.11 + Math.random() * 0.04, 0.07, { f: 3000 + Math.random() * 3000, q: 5, vol: 0.13 });
       tone(400, t, 1.3, { type: 'sawtooth', vol: 0.07, slide: 45, lp: 1400 });
     },
+    brownout(t) {
+      tone(330, t, 0.5, { type: 'sawtooth', vol: 0.06, slide: 110, lp: 1200 });
+      tone(165, t + 0.25, 0.6, { type: 'square', vol: 0.05, slide: 70, lp: 800 });
+    },
+    surge(t) {
+      noise(t, 0.6, { f: 1800, fs: 200, q: 1.2, vol: 0.25 });
+      tone(70, t, 0.9, { type: 'sawtooth', vol: 0.12, slide: 35, lp: 700 });
+      for (let k = 0; k < 6; k++) noise(t + 0.15 + k * 0.09, 0.05, { f: 4000 + Math.random() * 2000, q: 6, vol: 0.12 });
+    },
     commit(t) { tone(330, t, 0.16, { type: 'triangle', vol: 0.06, slide: 660 }); tone(990, t + 0.1, 0.18, { type: 'sine', vol: 0.05, send: 0.3 }); },
     relay(t) {
       noise(t, 0.12, { f: 600, vol: 0.14 });

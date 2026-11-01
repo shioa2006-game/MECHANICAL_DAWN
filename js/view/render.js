@@ -396,6 +396,7 @@
       // the light fades out towards the end of a source's reach
       const reach = U.clamp(0.3 + s.volt[i] * 0.16, 0.3, 1);
       const brown = 0.35 + 0.65 * (s.sat == null ? 1 : s.sat); // the grid dims when it is overloaded
+      if (s.sat < 0.999 && Math.random() < 0.25 * (1 - s.sat)) continue; // and sputters
       c.globalAlpha = U.clamp((0.45 + 0.4 * pulse) * reach * brown + flash, 0, 1);
       const core = flash > 0.2 ? '#ffffff' : pc ? C.corePlayer : C.coreOld;
       const a = 7;
@@ -424,7 +425,7 @@
         px(c, X + 1, Y + 11, 4, 2, '#2c3040');
         px(c, X + 3, Y + 1, 5, 2, '#3c4258');
         px(c, X + 5, Y + 3, 3, 1, L.broken ? '#3a2a2a' : '#5a5e70');
-      } else if (lit) {
+      } else if (lit && !(s.sat < 0.999 && Math.random() < 0.3 * (1 - s.sat))) {
         const t0 = fx.powerOn.get(L.i);
         const fl = t0 != null && now - t0 < 0.6 ? (Math.sin((now - t0) * 60) > 0 ? 1 : 0.3) : 1;
         c.globalAlpha = fl;
@@ -593,6 +594,16 @@
       case 'generator': drawGenerator(c, X, Y, W, H, now, emit, lv); break;
       case 'conveyor': drawConveyor(c, s, f, now, emit, lv); break;
       case 'reactor': drawReactor(c, X, Y, W, H, now, emit, lv, f); break;
+    }
+    if (f.damaged && emit) { // surge damage: arcs crawl over the casing
+      for (let k = 0; k < 3; k++) {
+        if (Math.random() < 0.4) continue;
+        let ax = X + 2 + ((Math.random() * (W - 4)) | 0), ay = Y + 2 + ((Math.random() * (H - 4)) | 0);
+        for (let n = 0; n < 5; n++) {
+          px(c, ax, ay, 1, 1, Math.random() < 0.5 ? '#ffffff' : '#ff9a4a');
+          ax += Math.random() < 0.5 ? 1 : -1; ay += Math.random() < 0.5 ? 1 : -1;
+        }
+      }
     }
     if (f.state === 'restoring' && !emit) {
       // scaffolding
@@ -838,6 +849,12 @@
         if (v.e && r.state !== 'sleep') c.drawImage(v.e, bx, by);
         if (r.state === 'full' && Math.sin(now * 6 + r.id) > 0) { px(c, bx + 5, by - 6, 2, 3, '#ffcc33'); px(c, bx + 5, by - 2, 2, 1, '#ffcc33'); }
         if (r.state === 'sleep' && (now + r.id) % 3 < 1.5) px(c, bx + 9, by - 2 - Math.floor(((now + r.id) % 1.5) * 3), 2, 2, '#8b90a8');
+        // starved of power: a blinking bolt over every working robot
+        if (r.role !== 'idle' && r.role !== 'parade' && s.sat < 0.999 && Math.sin(now * (s.tripT ? 14 : 7) + r.id) > -0.2) {
+          const col = s.tripT ? '#ff5a4c' : '#ffb347';
+          px(c, bx + 6, by - 7, 2, 1, col); px(c, bx + 5, by - 6, 2, 1, col); px(c, bx + 4, by - 5, 4, 1, col);
+          px(c, bx + 5, by - 4, 2, 1, col); px(c, bx + 4, by - 3, 2, 1, col);
+        }
       }
     }
   }

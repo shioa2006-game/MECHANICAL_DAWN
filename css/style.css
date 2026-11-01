@@ -127,7 +127,17 @@ button.mini { font-size: 12px; padding: 1px 6px; margin-left: 8px; }
 #tooltip .ng { color: #ffcc66; }
 #tooltip .warn { color: #ff9a6a; }
 #temp-num { color: #ffb347; font-size: 12px; margin-left: 6px; }
+.res.power .pw { display: flex; flex-direction: column; gap: 2px; }
+.res.power .pw-top { display: flex; align-items: baseline; gap: 5px; }
+#power-bar { position: relative; width: 96px; height: 6px; background: #1a1d28; border: 1px solid #3a3f52; }
+#power-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #7dff9a; transition: width 0.3s; }
+#power-bar.mid #power-fill { background: #ffcc66; }
+#power-bar.over { border-color: #ff5a4c; }
+#power-bar.over #power-fill { background: #ff5a4c; animation: blink 0.6s steps(2) infinite; }
+#res-power.short { background: rgba(255, 70, 50, 0.16); outline: 1px solid rgba(255, 90, 76, 0.6); padding: 0 4px; animation: pulse-red 1.2s ease-in-out infinite; }
+@keyframes pulse-red { 50% { background: rgba(255, 70, 50, 0.3); } }
 #res-power.short b, #res-power.short small { color: #ff8a6a; }
+.rrow button.plus.over { border-color: #ff9a4a; color: #ffb070; }
 #res-power.trip b, #res-power.trip small { color: #ff5a4c; animation: blink 0.5s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0.35; } }
 #btn-relay.on { background: #1d4a5a; border-color: #8ff8ff; color: #e8ffff; }

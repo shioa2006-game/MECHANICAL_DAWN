@@ -123,7 +123,7 @@
     const fi = s.facAt[i];
     if (fi >= 0) {
       const f = s.facilities[fi];
-      const st = { dormant: f.connected ? '停止中・接続済み' : '停止中・未接続', restoring: '復旧作業中', active: '稼働中', ready: '点火待ち', ignited: '稼働中' }[f.state];
+      const st = f.damaged ? '損傷・修理待ち' : { dormant: f.connected ? '停止中・接続済み' : '停止中・未接続', restoring: '復旧作業中', active: '稼働中', ready: '点火待ち', ignited: '稼働中' }[f.state];
       return '<b>' + f.name + '</b>（' + st + '）<br>クリックで詳細';
     }
     const di = s.depAt[i];
@@ -214,7 +214,11 @@
     pw.classList.toggle('short', cov < 1 && !s.tripT);
     pw.classList.toggle('trip', s.tripT > 0);
     setText('r-power', dem + '/' + sup);
-    setText('r-power-sub', s.tripT > 0 ? '停電 ' + Math.ceil(s.tripT) + '秒' : cov < 1 ? '作業 ' + Math.round(s.sat * 100) + '%' : '使用/発電');
+    setText('r-power-sub', s.tripT > 0 ? '停電 ' + Math.ceil(s.tripT) + '秒' : cov < 1 ? '電力不足 作業' + Math.round(s.sat * 100) + '%' : '使用/発電');
+    const bar = $('power-bar');
+    $('power-fill').style.width = Math.round(Math.min(1, sup ? dem / sup : 1) * 100) + '%';
+    bar.classList.toggle('over', dem > sup);
+    bar.classList.toggle('mid', dem <= sup && sup - dem <= 1);
     const parts = G.demandParts(s);
     const label = { scrap: 'スクラップ採掘', crystal: '結晶採掘', haul: '運搬', repair: '修理', relay: '中継塔', conveyor: 'コンベヤー' };
     pw.title = '電力 ⚡ 使用 ' + dem + ' / 発電 ' + sup + (cov < 1 ? '（不足：作業速度 ' + Math.round(s.sat * 100) + '%）' : '') + '\n' +
@@ -270,6 +274,8 @@
       out.push({ t: '断線を見つけた → 修理ロボで直せる' });
     }
     const cov = G.coverage(s);
+    const dmg = s.facilities.find((f) => f.damaged);
+    if (dmg) out.push({ t: dmg.name + 'が損傷中（発電停止）→ 修理ロボが直す', warn: true, fac: dmg.id });
     if (s.tripT > 0) out.push({ t: '停電中！ 送電網の復帰まで ' + Math.ceil(s.tripT) + '秒', warn: true });
     else if (cov < 1) out.push({ t: '電力不足：作業速度 ' + Math.round(s.sat * 100) + '% → 発電所を復旧するか、ロボを待機（−）に', warn: true });
     else if (G.factory(s).state === 'active' && G.supply(s) - G.demand(s) >= 2 && s.res.scrap >= MD.BAL.robotCost.scrap) out.push({ t: '発電に余裕あり（⚡' + (G.supply(s) - G.demand(s)) + '）→ ロボを増やせる' });
@@ -333,15 +339,17 @@
       const st = roleStatus(s, role);
       const plusOk = idle > 0 || (canBuild && afford);
       const draw = MD.BAL.upkeep[role];
-      const over = spare < draw ? '（電力不足になる）' : '';
+      // what one more robot of this role would do to the work speed of the whole city
+      const after = Math.pow(Math.min(1, G.supply(s) / Math.max(1, G.demand(s) + draw)), 2);
+      const over = after < 0.999 ? '（電力不足になる：作業速度 ' + Math.round(after * 100) + '%）' : '';
       const plusTitle = (idle > 0 ? '待機中のロボットを割り当てる' : !fActive ? '工場が停止中' : afford ? '新しく製造する（⚙' + MD.BAL.robotCost.scrap + '）' : 'スクラップが足りない') + ' 使用電力 +' + draw + over;
       return '<div class="rrow"><div class="ri" style="background:' + R.color + '">' + R.icon + '</div>' +
         '<div class="rn">' + R.name + '<small>⚡' + draw + '</small></div><div class="rc">' + n + '</div>' +
         '<button data-minus="' + role + '" title="待機に戻す" aria-label="' + R.name + 'を1体減らす"' + (n ? '' : ' disabled') + '>−</button>' +
-        '<button class="plus' + (idle ? '' : ' build') + '" data-plus="' + role + '" title="' + plusTitle + '" aria-label="' + R.name + 'を1体増やす"' + (plusOk ? '' : ' disabled') + '>＋</button>' +
+        '<button class="plus' + (idle ? '' : ' build') + (over ? ' over' : '') + '" data-plus="' + role + '" title="' + plusTitle + '" aria-label="' + R.name + 'を1体増やす"' + (plusOk ? '' : ' disabled') + '>＋</button>' +
         '<div class="rs ' + (st.c || '') + '">' + st.t + '</div></div>';
     }).join('');
-    const sig = rows + idle + s.buildQueue.length + ':' + (spare >= 2);
+    const sig = rows + idle + s.buildQueue.length;
     if (lastSig.robots !== sig) { $('robot-rows').innerHTML = rows; lastSig.robots = sig; }
     setText('robot-cap', '⚡ 使用 ' + G.demand(s) + ' / 発電 ' + G.supply(s));
     let note;
@@ -389,7 +397,7 @@
 
   function facCard(s, f) {
     const G = MD.G, def = G.def(f);
-    const [bc, bt] = STATE_BADGE[f.state] || ['off', ''];
+    const [bc, bt] = f.damaged ? ['work', '損傷'] : STATE_BADGE[f.state] || ['off', ''];
     let h = '<h4>' + f.name + ' <span class="badge ' + bc + '">' + bt + '</span></h4>';
     h += '<div class="desc">' + def.desc + '</div><div class="eff">効果：' + def.effect + '</div>';
     if (def.power) h += '<div class="row"><span>発電</span><span>⚡' + (def.power + G.genBonus(s)) + (f.state === 'active' ? '' : '（復旧後）') + '</span></div>';

@@ -14,6 +14,7 @@
   let zoomIdx = 4;
   let touchMode = false;
   let lastBlocked = { t: -9, i: -1 };
+  let lastBrownoutTip = -99;
   let endingShown = false;
   const view = { hover: null, hoverOk: true, plan: null, planLabel: null, selection: null, pointer: null, follow: true, focus: null, touchTarget: null, relay: null };
   let planKey = '';
@@ -133,7 +134,7 @@
     const robots = s.robots.filter((r) => r.role !== 'parade').length;
     $('end-stats').innerHTML = [
       ['クリアタイム', U.fmtTime(s.wonAt)], ['出撃回数', st.sorties + '回'], ['敷いたケーブル', st.cables + 'マス'],
-      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['中継塔', s.relays.length + '基'], ['最大発電', G.supply(s) + '⚡'], ['緊急回収', (st.recalls || 0) + '回'],
+      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['中継塔', s.relays.length + '基'], ['最大発電', G.supply(s) + '⚡'], ['損傷した発電所', (st.damaged || 0) + '回'], ['緊急回収', (st.recalls || 0) + '回'],
       ['回収した記録', s.logsRead.length + '/' + MD.LOGS.length],
     ].map(([k, v]) => '<div>' + k + '<b>' + v + '</b></div>').join('');
     save();
@@ -415,12 +416,39 @@
         RV.shake(1.2);
         A.play('short');
         view.follow = true;
-        UI.banner('停電', '過放電で送電網のブレーカーが落ちた — ' + MD.BAL.tripTime + '秒間、都市が止まる');
         break;
       }
+      case 'surge': {
+        const f = s.facilities[ev.fac], [cx, cy] = facCenter(f);
+        RV.ring(cx, cy, { r1: 60, col: '#ff6b5b', life: 1.2, w: 2 });
+        RV.burst(cx, cy, { n: 40, speed: 90, cols: ['#ffffff', '#ff9a4a', '#ff5a4c'], life: 0.9, g: 30 });
+        RV.shake(1.6);
+        A.play('surge');
+        UI.banner(f.name + '　損傷', '過放電のサージが逆流した — 修理ロボが直すまで発電 −' + ev.lost + '⚡');
+        view.focus = { x: cx, y: cy, until: now + 2.2 };
+        break;
+      }
+      case 'repaired': {
+        const f = s.facilities[ev.fac], [cx, cy] = facCenter(f);
+        RV.facPowerUp(f.id, now);
+        RV.ring(cx, cy, { r1: 40, col: '#7dff9a', life: 0.9 });
+        A.play('breakFixed');
+        UI.toast(f.name + 'の修理が完了 — 発電が戻った', 'good');
+        break;
+      }
+      case 'brownout': {
+        if (now - lastBrownoutTip > 25) {
+          lastBrownoutTip = now;
+          A.play('brownout');
+          UI.toast('電力不足！ 使用 ' + ev.demand + ' ＞ 発電 ' + ev.supply + ' → 都市の作業速度 ' + Math.round(ev.speed * 100) + '%。発電所を復旧するか、ロボを待機（−）に', 'warn', 6500);
+        }
+        break;
+      }
+      case 'brownoutEnd':
+        if (now - lastBrownoutTip > 3) UI.toast('電力が足りた — 作業速度 100%', 'info', 2500);
+        break;
       case 'tripEnd':
         A.play('connect');
-        UI.toast('送電網が復帰した', 'info', 2500);
         break;
       case 'recalled': {
         const [wx, wy] = wpos(ev.from.x, ev.from.y);
