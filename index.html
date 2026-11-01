@@ -18,7 +18,7 @@
       <div class="hud-block" id="hud-battery">
         <div class="label"><span class="k">BATTERY</span> <span id="mode-text">基地で待機</span></div>
         <div id="pips"></div>
-        <div class="sub"><span id="bat-num">10/10</span><button id="btn-return" class="mini" title="基地へ帰還して充電 [R]">帰還 R</button></div>
+        <div class="sub"><span id="bat-num">10/10</span><span id="temp-num"></span><button id="btn-return" class="mini" title="基地へ帰還して充電 [R]">帰還 R</button><button id="btn-relay" class="mini" title="ホタルの足元に中継塔を建てる [B]">中継塔 B</button></div>
       </div>
       <div class="hud-block" id="hud-res">
         <div class="res" title="スクラップ：施設の復旧・ロボット製造・強化に使う"><i class="ico scrap"></i><b id="r-scrap">0</b><small id="r-scrap-rate"></small></div>
@@ -105,11 +105,18 @@
             <li>バッテリーが尽きると自動で基地へ帰還して充電（<b>R</b>で手動帰還）。</li>
             <li>マウスを乗せると経路と消費バッテリーを表示。</li>
           </ul>
-          <h4>送電網</h4>
+          <h4>仮設ケーブルと漏電床</h4>
           <ul>
-            <li>施設や資源に<b>ケーブルを隣接</b>させると接続される。</li>
-            <li>街に眠る<b>古い送電線</b>に触れると、断線までの区間が一気に復活する。</li>
-            <li>ロボットは<b>送電網の上しか動けない</b>。網の形が物流の速さを決める。</li>
+            <li>その出撃で敷いたケーブルは<b>仮設</b>。<b>基地に帰る</b>か、<b>施設・資源・古い送電線</b>につなぐと確定する。</li>
+            <li>闇には<b>漏電床</b>が隠れている。踏むとバッテリー<b>−3</b>。足りなければ<b>緊急回収</b>され、今回の仮設ケーブルと拾った物を失う。</li>
+            <li>地面の<b>火花</b>は、周囲8マスに漏電床がある印（粒の数＝個数）。スキャナがあれば正体が見える。</li>
+          </ul>
+          <h4>送電網と電圧</h4>
+          <ul>
+            <li>施設や資源に<b>ケーブルを隣接</b>させると接続される。ただし<b>電気が届く距離</b>には限りがある（基地16マス・変電所14マス）。</li>
+            <li>街に眠る<b>古い送電線</b>は損失なしで電気を運ぶ。触れると断線までの区間が一気に復活する。</li>
+            <li>電気が届かない所には、ケーブルの上で<b>B</b>を押して<b>中継塔</b>を建てる（そこから12マス）。近道のケーブルを敷き直すのも手。</li>
+            <li>ロボットは<b>電気の通った送電網の上しか動けない</b>。網の形が物流の速さを決める。</li>
           </ul>
         </div>
         <div>
@@ -127,7 +134,7 @@
           <h4>その他の操作</h4>
           <ul>
             <li>ドラッグ：視点移動 ／ ホイール・Q/E：ズーム ／ Space：ホタルへ</li>
-            <li>M：音 ／ Esc：メニュー ／ 進行は自動保存</li>
+            <li>B：中継塔 ／ M：音 ／ Esc：メニュー ／ 進行は自動保存</li>
           </ul>
         </div>
       </div>

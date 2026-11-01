@@ -121,6 +121,20 @@
     log(t) { for (let k = 0; k < 7; k++) tone(1100 + Math.random() * 900, t + k * 0.045, 0.03, { type: 'square', vol: 0.035, lp: 4000 }); },
     discover(t) { tone(523, t, 0.18, { type: 'triangle', vol: 0.08, send: 0.5 }); tone(784, t + 0.13, 0.3, { type: 'triangle', vol: 0.08, send: 0.5 }); },
     breakFixed(t) { noise(t, 0.2, { f: 3000, q: 2, vol: 0.08 }); tone(440, t + 0.1, 0.3, { type: 'triangle', vol: 0.07, slide: 880, send: 0.3 }); },
+    shock(t) {
+      noise(t, 0.35, { f: 5200, fs: 1800, q: 4, vol: 0.22 });
+      tone(90, t, 0.3, { type: 'sawtooth', vol: 0.1, slide: 60, lp: 900 });
+      for (let k = 0; k < 5; k++) tone(2400 + Math.random() * 1600, t + k * 0.04, 0.03, { type: 'square', vol: 0.04, lp: 6000 });
+    },
+    short(t) {
+      for (let k = 0; k < 9; k++) noise(t + k * 0.11 + Math.random() * 0.04, 0.07, { f: 3000 + Math.random() * 3000, q: 5, vol: 0.13 });
+      tone(400, t, 1.3, { type: 'sawtooth', vol: 0.07, slide: 45, lp: 1400 });
+    },
+    commit(t) { tone(330, t, 0.16, { type: 'triangle', vol: 0.06, slide: 660 }); tone(990, t + 0.1, 0.18, { type: 'sine', vol: 0.05, send: 0.3 }); },
+    relay(t) {
+      noise(t, 0.12, { f: 600, vol: 0.14 });
+      [440, 660, 880].forEach((f, k) => tone(f, t + 0.12 + k * 0.08, 0.3, { type: 'triangle', vol: 0.07, send: 0.4 }));
+    },
     ping(t, p) { tone(mf(72 + [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24][p.k % 11]), t, 0.25, { type: 'triangle', vol: 0.05, send: 0.35 }); },
     ignite(t) {
       tone(36, t, 4, { type: 'sine', vol: 0.4, slide: 55, attack: 1.5 });

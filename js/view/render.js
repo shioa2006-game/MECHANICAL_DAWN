@@ -300,10 +300,44 @@
     if (m & 8) px(c, X + a, Y, b, a + b, col);
   }
 
+  // Provisional cable joins anything it touches: other cable, old lines, the dock or a facility.
+  function tempMask(s, x, y) {
+    let m = 0;
+    const chk = (nx, ny, bit) => {
+      if (nx < 0 || ny < 0 || nx >= s.W || ny >= s.H) return;
+      const n = ny * s.W + nx;
+      if (s.cable[n] || s.old[n] >= 1 || s.facAt[n] === 0) m |= bit;
+    };
+    chk(x + 1, y, 1); chk(x - 1, y, 2); chk(x, y + 1, 4); chk(x, y - 1, 8);
+    return m;
+  }
+
+  function drawTempCable(c, s, i, now, emit) {
+    const x = i % s.W, y = (i / s.W) | 0, X = x * TS, Y = y * TS;
+    const m = tempMask(s, x, y);
+    const burning = s.ex.mode === 'shorted';
+    if (!emit) {
+      drawCableShape(c, X - 1, Y - 1, m, '#1a1008', true);
+      // dashed: the line is only tacked down for now
+      const seg = (sx, sy, w, h) => px(c, sx, sy, w, h, '#8a5a24');
+      if (m & 1) for (let k = 9; k < TS; k += 3) seg(X + k, Y + 7, 2, 2);
+      if (m & 2) for (let k = 0; k < 7; k += 3) seg(X + k, Y + 7, 2, 2);
+      if (m & 4) for (let k = 9; k < TS; k += 3) seg(X + 7, Y + k, 2, 2);
+      if (m & 8) for (let k = 0; k < 7; k += 3) seg(X + 7, Y + k, 2, 2);
+      px(c, X + 7, Y + 7, 2, 2, '#8a5a24');
+      return;
+    }
+    const tw = 0.5 + 0.5 * Math.sin(now * 5 + x * 0.9 + y * 1.3);
+    c.globalAlpha = burning ? (Math.random() < 0.5 ? 1 : 0.2) : 0.35 + 0.35 * tw;
+    px(c, X + 7, Y + 7, 2, 2, burning ? (Math.random() < 0.5 ? '#ffffff' : '#ff5a4c') : '#ffb347');
+    c.globalAlpha = 1;
+  }
+
   function drawCablesBase(c, s, now) {
     const W = s.W;
     for (let i = 0; i < s.cable.length; i++) {
       if (!s.revealed[i]) continue;
+      if (s.cable[i] === 2) { drawTempCable(c, s, i, now, false); continue; }
       const pc = s.cable[i] === 1, ol = s.old[i];
       if (!pc && !ol) continue;
       if (ol && s.buried[i] && !pc && !s.powered[i] && !s.upgrades.scanner) continue;
@@ -348,6 +382,7 @@
   function drawCablesEmit(c, s, now) {
     const W = s.W;
     for (let i = 0; i < s.cable.length; i++) {
+      if (s.cable[i] === 2 && s.revealed[i]) { drawTempCable(c, s, i, now, true); continue; }
       if (!s.revealed[i] || !s.powered[i]) continue;
       if (!visOn(s, i, now)) continue;
       const pc = s.cable[i] === 1;
@@ -357,7 +392,9 @@
       const t0 = fx.powerOn.get(i);
       const flash = t0 != null ? U.clamp(1 - (now - t0) / 0.5, 0, 1) : 0;
       const pulse = 0.55 + 0.45 * Math.sin(now * 3.2 - d * 0.55);
-      c.globalAlpha = U.clamp(0.45 + 0.4 * pulse + flash, 0, 1);
+      // the light fades out towards the end of a source's reach
+      const reach = U.clamp(0.3 + s.volt[i] * 0.16, 0.3, 1);
+      c.globalAlpha = U.clamp((0.45 + 0.4 * pulse) * reach + flash, 0, 1);
       const core = flash > 0.2 ? '#ffffff' : pc ? C.corePlayer : C.coreOld;
       const a = 7;
       px(c, X + a, Y + a, 1, 1, core);
@@ -417,6 +454,63 @@
     }
   }
   function G_touchesPower(s, i) { return MD.G.neighborsOf(s, i).some((n) => s.powered[n]); }
+
+  // Live floors (once known) and the spark hints around them: one glint per live floor nearby.
+  const SPARK_MAX = 4;
+  function drawHazards(c, s, now, emit) {
+    const W = s.W;
+    for (let i = 0; i < s.hz.length; i++) {
+      if (!s.revealed[i]) continue;
+      const x = i % W, y = (i / W) | 0, X = x * TS, Y = y * TS;
+      if (s.hz[i] && s.hzKnown[i]) {
+        const insulated = !!s.cable[i];
+        if (!emit) {
+          px(c, X + 2, Y + 2, 12, 12, insulated ? '#23262e' : '#151a2a');
+          for (let k = 0; k < 4; k++) px(c, X + 3, Y + 4 + k * 3, 10, 1, insulated ? '#3a3e48' : '#2c3a5c');
+        } else if (!insulated) {
+          for (let k = 0; k < 3; k++) {
+            if (Math.random() < 0.5) continue;
+            let ax = X + 3 + ((Math.random() * 10) | 0), ay = Y + 3 + ((Math.random() * 10) | 0);
+            for (let n = 0; n < 4; n++) {
+              px(c, ax, ay, 1, 1, Math.random() < 0.5 ? '#ffffff' : '#7fd8ff');
+              ax += Math.random() < 0.5 ? 1 : -1; ay += Math.random() < 0.5 ? 1 : -1;
+            }
+          }
+        }
+        continue;
+      }
+      const n = s.hzN[i];
+      if (!emit || !n || s.tile[i] === T().BUILDING) continue;
+      // a short row of embers along the bottom of the tile: count them like minesweeper digits
+      const x0 = X + 8 - Math.round(n * 1.5);
+      for (let k = 0; k < Math.min(n, SPARK_MAX); k++) {
+        const ph = now * 3 + U.hash(x, y, k) * 9;
+        c.globalAlpha = 0.7 + 0.3 * Math.sin(ph);
+        px(c, x0 + k * 3, Y + 12, 2, 2, Math.sin(ph * 1.7) > 0.8 ? '#ffffff' : '#ff8a3c');
+      }
+      c.globalAlpha = 1;
+    }
+  }
+
+  function drawRelays(c, s, now, emit) {
+    for (const i of s.relays) {
+      if (!s.revealed[i]) continue;
+      const X = (i % s.W) * TS, Y = ((i / s.W) | 0) * TS;
+      if (!emit) {
+        px(c, X + 3, Y + 12, 10, 3, '#1c2030');
+        px(c, X + 5, Y + 2, 6, 11, '#2c3448');
+        px(c, X + 2, Y + 4, 12, 2, '#3c4660');
+      } else {
+        // a lattice mast in teal so it reads apart from the amber cable it stands on
+        const on = Math.sin(now * 3 + i) > -0.3;
+        px(c, X + 5, Y + 3, 1, 10, '#4fb8d8'); px(c, X + 10, Y + 3, 1, 10, '#4fb8d8');
+        for (let k = 0; k < 3; k++) px(c, X + 6, Y + 5 + k * 3, 4, 1, '#3a90b0');
+        px(c, X + 2, Y + 4, 12, 1, '#8ff8ff');
+        px(c, X + 7, Y + 0, 2, 3, on ? '#e8ffff' : '#4aa8c8');
+        px(c, X + 2, Y + 3, 1, 1, '#ffe08a'); px(c, X + 13, Y + 3, 1, 1, '#ffe08a');
+      }
+    }
+  }
 
   function drawItems(c, s, now, emit) {
     const SP = MD.Sprites;
@@ -739,6 +833,16 @@
     if (!emit) {
       px(c, bx + 2, Math.round(Y) + 14, 8, 1, 'rgba(0,0,0,0.35)');
       c.drawImage(v.c, bx, by);
+    } else if (e.mode === 'shorted') {
+      // overdrawn: the lamp sputters and arcs crawl over the shell
+      if (Math.random() < 0.4 && v.e) c.drawImage(v.e, bx, by);
+      for (let k = 0; k < 4; k++) {
+        let ax = bx + ((Math.random() * 12) | 0), ay = by + ((Math.random() * 12) | 0);
+        for (let n = 0; n < 5; n++) {
+          px(c, ax, ay, 1, 1, Math.random() < 0.5 ? '#ffffff' : '#7fd8ff');
+          ax += Math.random() < 0.5 ? 1 : -1; ay += Math.random() < 0.5 ? 1 : -1;
+        }
+      }
     } else if (v.e) {
       const low = e.mode === 'out' && e.battery <= 2;
       if (!(low && Math.sin(now * 12) > 0.4)) c.drawImage(v.e, bx, by);
@@ -843,6 +947,11 @@
       if (!s.powered[i] || !s.revealed[i] || !visOn(s, i, now)) continue;
       add((i % s.W + 0.5) * TS, (((i / s.W) | 0) + 0.5) * TS, 1.5, 0.42);
     }
+    for (const i of s.relays) if (s.revealed[i]) add((i % s.W + 0.5) * TS, (((i / s.W) | 0) + 0.2) * TS, 2.4, 0.8);
+    for (let i = 0; i < s.hz.length; i++) {
+      if (s.hz[i] && s.hzKnown[i] && !s.cable[i] && s.revealed[i]) add((i % s.W + 0.5) * TS, (((i / s.W) | 0) + 0.5) * TS, 1.3, 0.35 + 0.2 * Math.random());
+    }
+    if (e.mode === 'shorted') add((e.fx + 0.5) * TS, (e.fy + 0.5) * TS, 2.2, Math.random());
     for (const Lp of s.lamps) if (Lp.lit && visOn(s, Lp.i, now) && s.revealed[Lp.i]) add((Lp.x + 0.35) * TS, (Lp.y + 0.3) * TS, 3.8, 1);
     for (const f of s.facilities) {
       const lv = facLevel(f, now);
@@ -1015,12 +1124,17 @@
       const info = s.revealed[i] ? MD.G.exStepInfo(s, i) : { cost: 1 };
       cost += info.cost || 0;
       const reach = k < plan.reach;
-      const col = reach ? (info.cost ? '#8ff8ff' : '#ffe08a') : '#ff5a4c';
+      const risky = plan.risky && plan.risky.has(k);
+      const col = !reach ? '#ff5a4c' : risky ? '#ff9a4a' : info.cost ? '#8ff8ff' : '#ffe08a';
       c.globalAlpha = 0.75 + 0.25 * Math.sin(now * 6 - k * 0.5);
       if (info.cost) {
         px(c, X + 2, Y + 2, 12, 1, col); px(c, X + 2, Y + 13, 12, 1, col);
         px(c, X + 2, Y + 2, 1, 12, col); px(c, X + 13, Y + 2, 1, 12, col);
         if (info.cost === 2) { px(c, X + 5, Y + 5, 6, 6, col); }
+        if (risky) { // lightning mark: a live floor here would overdraw the battery
+          px(c, X + 8, Y + 4, 2, 1, col); px(c, X + 7, Y + 5, 2, 1, col); px(c, X + 6, Y + 6, 4, 1, col);
+          px(c, X + 7, Y + 7, 2, 1, col); px(c, X + 6, Y + 8, 2, 1, col); px(c, X + 5, Y + 9, 2, 1, col);
+        }
       } else px(c, X + 7, Y + 7, 2, 2, col);
     }
     c.globalAlpha = 1;
@@ -1111,7 +1225,9 @@
         px(c, X + ox, Y + 3 + k * 4, 3, 1, k === 1 ? C.canalHi : C.canal2);
       }
     }
+    drawHazards(c, s, now, false);
     drawCablesBase(c, s, now);
+    drawRelays(c, s, now, false);
     drawLamps(c, s, now, false);
     drawBreaks(c, s, now, false);
     drawDeposits(c, s, now, false);
@@ -1126,6 +1242,8 @@
     c.imageSmoothingEnabled = false;
     drawWindows(c);
     drawCablesEmit(c, s, now);
+    drawHazards(c, s, now, true);
+    drawRelays(c, s, now, true);
     drawLamps(c, s, now, true);
     drawBreaks(c, s, now, true);
     drawDeposits(c, s, now, true);

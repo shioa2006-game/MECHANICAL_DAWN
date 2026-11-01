@@ -51,6 +51,63 @@ function goalTiles(s, g) {
   return out;
 }
 
+// A goal whose neighbouring cable exists but carries no power: returns that dead tile.
+function deadTouch(s, g) {
+  for (const t of goalTiles(s, g)) if (G.isConductive(s, t) && !s.powered[t]) return t;
+  return -1;
+}
+
+// Walk the cable back from a dead tile to the last live one: the place for a relay tower.
+function liveEdge(s, from) {
+  const seen = new Set([from]), q = [from];
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    if (s.powered[c]) return c;
+    for (const n of G.neighborsOf(s, c)) if (!seen.has(n) && G.isConductive(s, n)) { seen.add(n); q.push(n); }
+  }
+  return -1;
+}
+
+// Without scrap for a relay: find the live tile from which a fresh line over new ground still arrives
+// with power (reach left >= tiles to lay). Returns { from, path } where path leads from 'from' to the goal.
+function shortcut(s, g) {
+  const ends = goalTiles(s, g).filter((t) => G.exStepInfo(s, t).ok);
+  const N = s.W * s.H, dist = new Int32Array(N).fill(-1), next = new Int32Array(N).fill(-1);
+  const q = [];
+  for (const t of ends) { dist[t] = 1; q.push(t); }
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    if (s.powered[c]) {
+      if (s.volt[c] >= dist[c] - 1) {
+        const path = [];
+        for (let k = next[c]; k >= 0; k = next[k]) path.push(k);
+        return { from: c, path };
+      }
+      continue;
+    }
+    for (const n of G.neighborsOf(s, c)) {
+      if (dist[n] >= 0 || !G.exStepInfo(s, n).ok) continue;
+      if (G.isConductive(s, n) && !s.powered[n]) continue; // riding dead cable adds no power: lay new ground
+      dist[n] = dist[c] + 1; next[n] = c; q.push(n);
+    }
+  }
+  return null;
+}
+
+// Cautious play: cut the route before the first step that could hit a live floor with too little
+// battery left to survive it. Returns false if even the first new step is that risky.
+function trimRisky(s) {
+  const e = s.ex;
+  let bat = e.battery;
+  for (let k = 0; k < e.path.length; k++) {
+    const i = e.path[k], info = G.exStepInfo(s, i);
+    const cost = info.ok ? info.cost : 1;
+    if (cost > 0 && G.maybeHazard(s, i) && bat - cost < MD.BAL.hazardDrain) { e.path.length = k; return k > 0; }
+    bat -= cost;
+  }
+  return true;
+}
+
 function bestPlan(s, g) {
   let best = null;
   for (const t of goalTiles(s, g)) {
@@ -60,7 +117,7 @@ function bestPlan(s, g) {
   return best;
 }
 
-const DEFAULT_CFG = { goals: GOALS, restoreOrder: RESTORE_ORDER, upgradeOrder: UPGRADE_ORDER, robotPlan: ROBOT_PLAN };
+const DEFAULT_CFG = { goals: GOALS, restoreOrder: RESTORE_ORDER, upgradeOrder: UPGRADE_ORDER, robotPlan: ROBOT_PLAN, adaptive: true };
 
 function manageEconomy(s, log, cfg) {
   cfg = cfg || DEFAULT_CFG;
@@ -111,16 +168,42 @@ function rebalance(s, log) {
 function driveExplorer(s, cfg) {
   cfg = cfg || DEFAULT_CFG;
   const e = s.ex;
-  if (e.moving || e.path.length || e.mode === 'returning' || s.won) return;
+  if (e.moving || e.path.length || e.mode === 'returning' || e.mode === 'shorted' || s.won) return;
+  const go = (i) => {
+    G.cmdMoveTo(s, i % s.W, (i / s.W) | 0);
+    if (!cfg.reckless && !trimRisky(s) && e.mode === 'out') G.cmdReturn(s);
+  };
   const X = facOf(s, 'X');
   if (X.state === 'ready') {
     const p = bestPlan(s, { fac: 'X' });
-    if (p) G.cmdMoveTo(s, p.path[p.path.length - 1] % s.W, (p.path[p.path.length - 1] / s.W) | 0);
+    if (p) go(p.path[p.path.length - 1]);
     return;
   }
   for (const g of cfg.goals) {
     if (g.need && !s.upgrades[g.need]) continue;
     if (goalDone(s, g)) continue;
+    const dead = deadTouch(s, g);
+    const edge = dead >= 0 ? liveEdge(s, dead) : -1;
+    if (edge >= 0) {
+      // our cable reaches the goal but the power does not: put a relay tower at the live edge
+      if (G.relayCheck(s, edge).ok) {
+        if (e.y * s.W + e.x === edge) G.buildRelay(s);
+        else G.cmdMoveTo(s, edge % s.W, (edge / s.W) | 0);
+        return;
+      }
+      // no scrap for a relay: lay a shorter line from where the power is still strong
+      const sc = shortcut(s, g);
+      if (!sc) continue;
+      if (e.y * s.W + e.x !== sc.from) { G.cmdMoveTo(s, sc.from % s.W, (sc.from / s.W) | 0); return; }
+      const first = sc.path.find((i) => G.exStepInfo(s, i).cost > 0);
+      if (first != null && G.exStepInfo(s, first).cost > e.battery) {
+        if (e.mode === 'out') G.cmdReturn(s);
+        return;
+      }
+      e.path = sc.path; e.keyq = [];
+      if (!cfg.reckless && !trimRisky(s) && e.mode === 'out') G.cmdReturn(s);
+      return;
+    }
     const p = bestPlan(s, g);
     if (!p) continue;
     const firstCostly = p.path.findIndex((i) => G.exStepInfo(s, i).cost > 0);
@@ -128,8 +211,7 @@ function driveExplorer(s, cfg) {
       if (e.mode === 'out') G.cmdReturn(s);
       return;
     }
-    const last = p.path[p.path.length - 1];
-    G.cmdMoveTo(s, last % s.W, (last / s.W) | 0);
+    go(p.path[p.path.length - 1]);
     return;
   }
   if (e.mode === 'out') G.cmdReturn(s);
@@ -137,7 +219,7 @@ function driveExplorer(s, cfg) {
 
 function play(opts) {
   opts = opts || {};
-  const s = G.newGame();
+  const s = G.newGame({ seed: opts.seed != null ? opts.seed : 1, hazards: opts.hazards });
   const dt = 1 / 30, maxT = opts.maxTime || 3600;
   const marks = [];
   const log = (m) => { if (opts.verbose) console.log('[' + s.time.toFixed(1) + 's] ' + m); };
@@ -164,5 +246,6 @@ if (typeof require !== 'undefined' && require.main === module) {
   const { s, marks } = play({ verbose: process.argv.includes('-v') });
   for (const [t, m] of marks) console.log(MD.U.fmtTime(t).padStart(6), m);
   console.log('won:', s.won, 'time', MD.U.fmtTime(s.time), 'sorties', s.stats.sorties, 'cables', s.stats.cables,
+    'relays', s.relays.length, 'recalls', s.stats.recalls, 'lost tiles', s.stats.lostTiles,
     'robots', s.robots.filter((r) => r.role !== 'parade').length, 'res', JSON.stringify(s.res));
 }

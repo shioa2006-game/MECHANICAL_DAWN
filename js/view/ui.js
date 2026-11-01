@@ -12,6 +12,7 @@
   UI.init = function (handlers) {
     H = handlers;
     $('btn-return').onclick = () => H.returnHome();
+    $('btn-relay').onclick = () => H.buildRelay();
     $('btn-speed').onclick = () => H.cycleSpeed();
     $('btn-sound').onclick = () => H.toggleSound();
     $('btn-help').onclick = () => H.showHelp();
@@ -145,12 +146,30 @@
     }
     if (t === G.T.BUILDING) return null;
     const L = s.lampAt[i] >= 0 ? s.lamps[s.lampAt[i]] : null;
-    if (s.cable[i]) return '<b>送電ケーブル</b>' + (s.powered[i] ? '' : '（未通電）') + ' — 上はバッテリー消費なし';
-    if (s.old[i] === 1 && (!s.buried[i] || s.upgrades.scanner || s.powered[i])) {
-      return '<b>古い送電線</b>' + (s.powered[i] ? '（復活）' : '（休眠中）— 送電網で触れると一気に通電') + (L ? (L.broken ? '<br>壊れた街灯（修理ロボが直せる）' : '<br>街灯') : '');
+    const spark = s.hzN[i] && !s.hz[i] ? '<br><span class="warn">火花：周囲8マスに漏電床が ' + s.hzN[i] + ' 個</span>' : '';
+    const live = s.hz[i] && s.hzKnown[i];
+    if (s.relays.indexOf(i) >= 0) return '<b>中継塔</b> — ここから' + MD.BAL.relayReach + 'マス先まで送電する';
+    if (s.cable[i] === 2) {
+      return '<b>仮設ケーブル</b> — 基地に帰るか、施設・資源・古い送電線につなぐと確定' +
+        '<br><span class="ng">漏電床でバッテリーが尽きると焼き切れる</span>' + spark;
     }
+    if (s.cable[i]) {
+      return '<b>送電ケーブル</b>' + voltText(s, i) + (live ? '<br>漏電床（ケーブルで絶縁済み）' : '') + spark;
+    }
+    if (s.old[i] === 1 && (!s.buried[i] || s.upgrades.scanner || s.powered[i])) {
+      return '<b>古い送電線</b>' + (s.powered[i] ? '（復活・損失なし）' + voltText(s, i) : '（休眠中）— 送電網で触れると一気に通電') + (L ? (L.broken ? '<br>壊れた街灯（修理ロボが直せる）' : '<br>街灯') : '');
+    }
+    if (live) return '<b>漏電床</b> — 踏むとバッテリー −' + MD.BAL.hazardDrain + '（ケーブルを敷けば以後は無害）';
+    if (spark) return '<b>道路</b>' + spark + '<br>粒の数が多いほど危ない';
     return null;
   };
+
+  function voltText(s, i) {
+    const v = s.volt[i];
+    if (s.powered[i]) return '<br>電圧 ' + v + (v <= 2 ? ' <span class="warn">（もうすぐ届かなくなる）</span>' : '') + ' — 上はバッテリー消費なし';
+    if (v === MD.G.NO_VOLT) return '<br><span class="ng">電気が来ていない</span>';
+    return '<br><span class="ng">電圧不足（' + -v + 'マス届かない）</span> — 手前に中継塔［B］を建てるか、近道を敷こう';
+  }
 
   // ---------------------------------------------------------------- HUD
 
@@ -174,8 +193,13 @@
       lastSig.bat = e.battery;
     }
     setText('bat-num', e.battery + '/' + max);
-    setText('mode-text', e.mode === 'home' ? '基地で待機（充電済み）' : e.mode === 'returning' ? '帰還中…' : '出撃中 #' + s.stats.sorties);
+    setText('mode-text', e.mode === 'home' ? '基地で待機（充電済み）' : e.mode === 'returning' ? '帰還中…' : e.mode === 'shorted' ? '過放電！ 緊急回収中…' : '出撃中 #' + s.stats.sorties);
     $('btn-return').disabled = e.mode !== 'out';
+    setText('temp-num', e.temp.length ? '仮設 ' + e.temp.length : '');
+    const relayChk = G.relayCheck(s), rb = $('btn-relay');
+    setText('btn-relay', '中継塔 ⚙' + G.relayCost(s).scrap);
+    rb.disabled = !relayChk.ok;
+    rb.title = (relayChk.ok ? 'ホタルの足元に中継塔を建てる' : relayChk.why || '中継塔') + ' [B]';
     const sc = Math.floor(s.res.scrap), cr = Math.floor(s.res.crystal);
     if (lastSig.sc != null && sc > lastSig.sc) UI.bump('r-scrap');
     if (lastSig.cr != null && cr > lastSig.cr) UI.bump('r-crystal');
@@ -200,6 +224,18 @@
     const G = MD.G, out = [];
     for (const f of s.facilities) {
       if (f.state === 'dormant' && f.connected && G.canRestore(s, f).ok) out.push({ t: f.name + 'を復旧できる（クリック）', fac: f.id });
+    }
+    // cable laid up to something, but the power runs out before it gets there
+    for (const f of s.facilities) {
+      if (f.connected || f.kind === 'dock' || !f.seen) continue;
+      if (G.spotsAround(s, f.tiles).length) continue;
+      if (f.tiles.some((t) => G.neighborsOf(s, t).some((n) => s.cable[n] === 1 && !s.powered[n]))) {
+        out.push({ t: f.name + 'まで電気が届かない → 中継塔［B］か近道を', warn: true, fac: f.id });
+        break;
+      }
+    }
+    if (s.ex.temp.length >= 4 && s.ex.mode === 'out' && s.ex.battery <= MD.BAL.hazardDrain) {
+      out.push({ t: '仮設ケーブル ' + s.ex.temp.length + 'マス：帰還（R）で確定できる', warn: true });
     }
     const idle = s.robots.filter((r) => r.role === 'idle').length;
     if (idle) out.push({ t: '待機中のロボット ' + idle + '体 → ＋で役割を与えよう', warn: true });

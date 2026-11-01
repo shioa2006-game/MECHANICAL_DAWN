@@ -32,7 +32,7 @@
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return null;
       const d = JSON.parse(raw);
-      if (d.v !== 1 || d.W !== MD.MAP[0].length || d.H !== MD.MAP.length) return null;
+      if (d.v !== 2 || d.W !== MD.MAP[0].length || d.H !== MD.MAP.length) return null;
       d.events = [];
       return d;
     } catch (e) { return null; }
@@ -51,7 +51,7 @@
   }
 
   function makeDemo() {
-    const d = G.newGame();
+    const d = G.newGame({ hazards: false });
     d.revealed.fill(1);
     d.districtLight = { sw: 0.35, ind: 0.25, nw: 0.2, core: 0.12 };
     d.restoration = 18;
@@ -133,7 +133,8 @@
     const robots = s.robots.filter((r) => r.role !== 'parade').length;
     $('end-stats').innerHTML = [
       ['クリアタイム', U.fmtTime(s.wonAt)], ['出撃回数', st.sorties + '回'], ['敷いたケーブル', st.cables + 'マス'],
-      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['回収した記録', s.logsRead.length + '/' + MD.LOGS.length],
+      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['中継塔', s.relays.length + '基'], ['緊急回収', (st.recalls || 0) + '回'],
+      ['回収した記録', s.logsRead.length + '/' + MD.LOGS.length],
     ].map(([k, v]) => '<div>' + k + '<b>' + v + '</b></div>').join('');
     save();
   }
@@ -200,10 +201,21 @@
       return;
     }
     view.plan = p;
+    // steps where a hidden live floor would overdraw the battery (and burn this sortie's cable)
+    p.risky = new Set();
+    let bat = e.battery;
+    for (let k = 0; k < p.reach; k++) {
+      const pi = p.path[k], cost = (s.revealed[pi] ? G.exStepInfo(s, pi).cost : 1) || 0;
+      if (cost > 0 && G.maybeHazard(s, pi) && bat - cost < MD.BAL.hazardDrain) p.risky.add(k);
+      bat -= cost;
+    }
     let text, col;
     if (p.cost === 0) { text = 'ケーブル上を移動（消費 0）'; col = '#ffe08a'; }
-    else if (p.reach >= p.path.length) { text = 'バッテリー ' + p.cost + ' / ' + e.battery + (p.unknown ? '（未探索あり）' : ''); col = '#8ff8ff'; }
-    else { text = 'バッテリーが ' + (p.cost - e.battery) + ' 足りない'; col = '#ff6b5b'; view.hoverOk = false; }
+    else if (p.reach >= p.path.length) {
+      text = 'バッテリー ' + p.cost + ' / ' + e.battery + (p.unknown ? '（未探索あり）' : '');
+      col = '#8ff8ff';
+      if (p.risky.size) { text += ' ⚡漏電なら回収'; col = '#ffb070'; }
+    } else { text = 'バッテリーが ' + (p.cost - e.battery) + ' 足りない'; col = '#ff6b5b'; view.hoverOk = false; }
     view.planLabel = { x: t.x, y: t.y, text, col };
   }
 
@@ -276,6 +288,12 @@
     if (G.cmdStep(s, dx, dy, repeat)) { view.follow = true; view.focus = null; }
   }
 
+  function buildRelay() {
+    if (mode !== 'play') return;
+    const r = G.buildRelay(s);
+    if (!r.ok) { if (r.why) UI.toast(r.why, 'warn'); A.play('deny'); }
+  }
+
   function returnHome() {
     if (mode !== 'play') return;
     if (G.cmdReturn(s)) view.follow = true;
@@ -336,13 +354,54 @@
   function handle(ev) {
     switch (ev.type) {
       case 'lay': {
-        const i = ev.y * s.W + ev.x;
-        RV.powerFlash(i, now);
         const [wx, wy] = wpos(ev.x, ev.y);
         RV.burst(wx, wy, { n: 5, speed: 22, cols: ['#ffe08a', '#ffb347'], life: 0.35, g: 0 });
         A.play('step'); A.play('lay', { battery: ev.battery });
+        once('t_temp', () => setTimeout(() => UI.toast('敷いたケーブルはまだ仮設（点線）。基地に帰るか、施設・資源・古い送電線につなぐと確定する。', 'info', 7000), 400));
         break;
       }
+      case 'commit': {
+        ev.tiles.forEach((i, k) => RV.powerFlash(i, now + k * 0.03));
+        if (!G.isDockTile(s, s.ex.y * s.W + s.ex.x)) A.play('commit');
+        break;
+      }
+      case 'shock': {
+        const [wx, wy] = wpos(ev.x, ev.y);
+        RV.burst(wx, wy, { n: 26, speed: 70, cols: ['#ffffff', '#7fd8ff', '#3fa8ff'], life: 0.45, g: 0 });
+        RV.ring(wx, wy, { r1: 26, col: '#7fd8ff', life: 0.5 });
+        RV.floatText(wx, wy - 10, '漏電！ −' + ev.drain, '#7fd8ff', { big: true, life: 1.4 });
+        RV.shake(0.6);
+        A.play('shock');
+        once('t_shock', () => UI.toast('漏電床を踏んだ！ バッテリー −' + ev.drain + '。足りないと緊急回収され、今回の仮設ケーブルを失う。地面の火花が目印。', 'warn', 8000));
+        break;
+      }
+      case 'short': {
+        const [wx, wy] = wpos(ev.x, ev.y);
+        RV.floatText(wx, wy - 12, '過放電！', '#ff6b5b', { big: true, life: 1.6 });
+        RV.shake(1.2);
+        A.play('short');
+        view.follow = true;
+        break;
+      }
+      case 'recalled': {
+        const [wx, wy] = wpos(ev.from.x, ev.from.y);
+        RV.burst(wx, wy, { n: 30, speed: 50, cols: ['#ff6b5b', '#ffb347', '#555'], life: 0.9, g: 20 });
+        A.play('ret');
+        UI.toast('緊急回収 — 仮設ケーブル ' + ev.lost + 'マスが焼き切れた。見つけた漏電床と地形は地図に残る。', 'warn', 6500);
+        break;
+      }
+      case 'relay': {
+        const [wx, wy] = wpos(ev.x, ev.y);
+        RV.ring(wx, wy, { r1: MD.BAL.relayReach * TS * 0.5, col: '#8ff8ff', life: 1.1, w: 2 });
+        RV.floatText(wx, wy - 10, '中継塔', '#8ff8ff');
+        A.play('relay');
+        once('t_relay', () => UI.toast('中継塔から先 ' + MD.BAL.relayReach + 'マスまで電気が届く。建てるたびに費用が上がる。', 'info', 6000));
+        save();
+        break;
+      }
+      case 'rescueWait':
+        UI.toast('休眠ロボットを見つけた — ケーブルが確定すると基地で目覚める', 'info', 5000);
+        break;
       case 'glide': A.play('glide'); break;
       case 'drill': {
         const [wx, wy] = wpos(ev.x, ev.y);
@@ -407,7 +466,7 @@
         RV.ring(cx, cy, { r1: 34, col: '#7dff9a', life: 0.8 });
         A.play('recharge');
         const sm = ev.summary;
-        if (sm && (sm.newTiles || sm.scrap || sm.crystal || sm.found.length)) {
+        if (sm && !sm.lost && (sm.newTiles || sm.scrap || sm.crystal || sm.found.length)) {
           const parts = [];
           if (sm.newTiles) parts.push('送電路 +' + sm.newTiles);
           if (sm.scrap) parts.push('⚙+' + sm.scrap);
@@ -415,7 +474,7 @@
           if (sm.found.length) parts.push('発見：' + Array.from(new Set(sm.found)).join('・'));
           UI.toast('出撃 #' + s.stats.sorties + ' 帰還 — ' + parts.join(' ／ '), 'good', 4500);
         }
-        once('t_recharge', () => setTimeout(() => UI.toast('ケーブルの上はバッテリーを使わない。クリックで一気にケーブルの先まで行ける。', 'info', 7000), 900));
+        if (!sm || !sm.lost) once('t_recharge', () => setTimeout(() => UI.toast('ケーブルの上はバッテリーを使わない。クリックで一気にケーブルの先まで行ける。', 'info', 7000), 900));
         save();
         break;
       }
@@ -576,6 +635,19 @@
     if (G.factory(s).state === 'active' && Object.keys(s.breaks).some((k) => G.neighborsOf(s, +k).some((n) => s.powered[n]))) {
       once('t_break', () => UI.toast('火花を散らす断線は、修理ロボが直すと先の送電線が復活する。', 'info', 6000));
     }
+    const e = s.ex;
+    if (!s.flags.t_spark && s.stats.sorties) {
+      for (let dy = -3; dy <= 3 && !s.flags.t_spark; dy++) for (let dx = -3; dx <= 3; dx++) {
+        const x = e.x + dx, y = e.y + dy;
+        if (G.inb(s, x, y) && s.revealed[y * s.W + x] && s.hzN[y * s.W + x]) {
+          once('t_spark', () => UI.toast('地面に火花…。周囲8マスに漏電床が隠れている印（粒の数＝個数）。マウスを乗せると詳しく分かる。', 'info', 8000));
+          break;
+        }
+      }
+    }
+    if (!s.flags.t_volt && s.facilities.some((f) => !f.connected && f.kind !== 'dock' && f.tiles.some((t) => G.neighborsOf(s, t).some((n) => s.cable[n] === 1 && !s.powered[n])))) {
+      once('t_volt', () => UI.toast('電気が届く距離には限りがある（基地から16マス）。電圧の残るケーブルの上で B を押すと中継塔が建つ。', 'warn', 9000));
+    }
     const d = s.deposits.find((x) => x.connected && x.buffer >= x.cap);
     if (d && !G.roleCount(s, 'haul')) once('t_full', () => UI.toast('置き場が満杯！ 掘った資源は運搬ロボが運ぶまで使えない。', 'warn', 6000));
   }
@@ -654,7 +726,7 @@
     A.muted = !!p.muted;
     UI.setSoundLabel(!A.muted);
     UI.init({
-      returnHome, cycleSpeed, toggleSound, showHelp,
+      returnHome, buildRelay, cycleSpeed, toggleSound, showHelp,
       pause: () => { if (mode === 'play') { mode = 'pause'; showScreen('pause'); } },
       zoom: (d) => zoom(d),
       centerExplorer: () => centerExplorer(false),
@@ -685,7 +757,7 @@
         else if (mode === 'pause' && code === 'Escape') { mode = 'play'; showScreen(null); }
         else if (mode === 'help' || (mode === 'title' && !$('help').classList.contains('hidden'))) closeHelp();
       },
-      step: onStep, click: onClick, returnHome, cycleSpeed, toggleSound, showHelp, escape,
+      step: onStep, click: onClick, returnHome, buildRelay, cycleSpeed, toggleSound, showHelp, escape,
       zoom: (d, sx, sy) => zoom(d, sx, sy),
       centerExplorer: () => centerExplorer(false),
       panTo: (x, y) => { view.follow = false; view.focus = null; RV.cam.x = x; RV.cam.y = y; RV.clampCam(); },

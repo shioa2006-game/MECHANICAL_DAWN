@@ -81,14 +81,20 @@
     conveyorInterval: 1.1,
     conveyorSpeed: 1.7,
     cellBonus: 1,
+    relayReach: 12,         // tiles of new cable a relay tower pushes power through (see FAC reach)
+    relayCost: 10, relayStep: 4, // scrap for the first relay tower, + per tower already built
+    hazardRate: 0.18,       // chance for an eligible street tile to be a live floor
+    hazardSafeRadius: 6,    // no live floors this close to the dock (Manhattan)
+    hazardDrain: 3,         // extra battery a live floor takes
+    shortDelay: 1.4,        // seconds of sparking before the emergency recall
   };
 
   // Facilities keyed by their map character.
   MD.FAC = {
     D: {
-      kind: 'dock', name: '基地ドック', w: 3, h: 3, startActive: true, power: 2, dropoff: true,
+      kind: 'dock', name: '基地ドック', w: 3, h: 3, startActive: true, power: 2, reach: 16, dropoff: true,
       desc: '探索機ホタルの充電基地。資源の保管庫でもある。',
-      effect: '帰還すると充電 / 資源の荷下ろし先',
+      effect: '帰還すると充電 / 資源の荷下ろし先 / 送電16マス',
     },
     F: {
       kind: 'factory', name: 'ロボット工場', cost: { scrap: 10 }, work: 0, power: 3, pts: 10,
@@ -109,22 +115,22 @@
       effect: '運搬ロボの荷下ろし先になる（運搬距離が短縮）',
     },
     '1': {
-      kind: 'substation', name: '第1変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, pts: 12,
+      kind: 'substation', name: '第1変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
       light: { ind: 0.65 }, music: 1,
       desc: '工業区へ電力を配っていた変電所。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 工業区が点灯',
+      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 工業区が点灯',
     },
     '2': {
-      kind: 'substation', name: '第2変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, pts: 12,
+      kind: 'substation', name: '第2変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
       light: { nw: 0.85 }, music: 1,
       desc: '運河の向こう、北西区の変電所。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 北西区が点灯',
+      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 北西区が点灯',
     },
     '3': {
-      kind: 'substation', name: '第3変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, pts: 12,
+      kind: 'substation', name: '第3変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
       light: { core: 0.5 }, music: 1,
       desc: '中枢区の変電所。中央動力炉への送電を担う。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 中枢区が点灯',
+      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 中枢区が点灯',
     },
     X: {
       kind: 'reactor', name: '中央動力炉', cost: { scrap: 30, crystal: 40 }, work: 20, pts: 20,

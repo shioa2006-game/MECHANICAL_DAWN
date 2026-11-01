@@ -26,6 +26,8 @@ function line(x0, y0, x1, y1) {
   return out;
 }
 function fac(s, ch) { return s.facilities.find((f) => f.ch === ch); }
+// Rule tests run on a fixed, hazard-free city unless a test places live floors itself.
+function fresh() { return G.newGame({ seed: 7, hazards: false }); }
 
 console.log('\nMap & setup');
 test('map is rectangular and fully enclosed', () => {
@@ -35,7 +37,7 @@ test('map is rectangular and fully enclosed', () => {
   ok(rows.every((r) => r[0] === '#' && r[r.length - 1] === '#'), 'side borders');
 });
 test('every facility and deposit has a reachable side', () => {
-  const s = G.newGame();
+  const s = fresh();
   for (const f of s.facilities) {
     if (f.kind === 'dock') continue;
     const sides = []; for (const t of f.tiles) for (const n of G.neighborsOf(s, t)) if (s.facAt[n] !== f.id) sides.push(n);
@@ -44,13 +46,13 @@ test('every facility and deposit has a reachable side', () => {
   for (const d of s.deposits) ok(G.neighborsOf(s, d.i).some((n) => s.tile[n] === G.T.STREET), 'deposit ' + d.x + ',' + d.y);
 });
 test('start state: battery 10, at dock, factory beacon & reactor known', () => {
-  const s = G.newGame();
+  const s = fresh();
   eq(s.ex.battery, 10); eq(s.ex.mode, 'home');
   ok(fac(s, 'F').known && fac(s, 'X').known);
   ok(!fac(s, '1').known, 'substation 1 should be unknown at start');
 });
 test('upgrade gates: rubble needs drill, canal needs hover', () => {
-  const s = G.newGame();
+  const s = fresh();
   ok(!G.exStepInfo(s, idx(s, 26, 20)).ok, 'rubble blocked');
   ok(!G.exStepInfo(s, idx(s, 10, 12)).ok, 'canal blocked');
   s.upgrades.drill = true; s.upgrades.hover = true;
@@ -58,7 +60,7 @@ test('upgrade gates: rubble needs drill, canal needs hover', () => {
   eq(G.exStepInfo(s, idx(s, 10, 12)).cost, 1);
 });
 test('all substations and the reactor reachable with drill+hover', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.upgrades.drill = true; s.upgrades.hover = true;
   const W = s.W, seen = new Set(), q = [];
   for (const t of G.dock(s).tiles) { seen.add(t); q.push(t); }
@@ -71,23 +73,26 @@ test('all substations and the reactor reachable with drill+hover', () => {
 });
 
 console.log('\nExplorer, steps & cable');
-test('a step onto new ground costs 1 battery and leaves powered cable', () => {
-  const s = G.newGame();
+test('a step onto new ground costs 1 battery and leaves provisional cable', () => {
+  const s = fresh();
   walk(s, [[5, 26], [6, 26]]);
   eq(s.ex.battery, 9);
-  eq(s.cable[idx(s, 6, 26)], 1);
-  eq(s.powered[idx(s, 6, 26)], 1);
+  eq(s.cable[idx(s, 6, 26)], 2, 'provisional until anchored');
+  eq(s.powered[idx(s, 6, 26)], 0, 'provisional cable carries no power');
   eq(s.ex.mode, 'out'); eq(s.stats.sorties, 1);
+  ok(G.cmdReturn(s)); run(s, 2);
+  eq(s.cable[idx(s, 6, 26)], 1, 'returning home makes it permanent');
+  eq(s.powered[idx(s, 6, 26)], 1);
 });
 test('walking on existing cable is free', () => {
-  const s = G.newGame();
+  const s = fresh();
   walk(s, [[5, 26], [6, 26], [6, 25], [6, 24]]);
   const b = s.ex.battery;
   walk(s, [[6, 25], [6, 26], [6, 25]]);
   eq(s.ex.battery, b);
 });
 test('battery cannot go below zero; buildings block', () => {
-  const s = G.newGame();
+  const s = fresh();
   walk(s, [[5, 26], [6, 26]]);
   G.cmdStep(s, 1, 0); run(s, 0.5); // (7,26) street
   const b = s.ex.battery;
@@ -95,7 +100,7 @@ test('battery cannot go below zero; buildings block', () => {
   eq(s.ex.battery, b); eq(s.ex.x, 7);
 });
 test('empty battery -> automatic return and recharge at dock', () => {
-  const s = G.newGame();
+  const s = fresh();
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 9, 20)]);
   eq(s.ex.battery, 0);
   run(s, 3);
@@ -103,7 +108,7 @@ test('empty battery -> automatic return and recharge at dock', () => {
   eq(s.cable[idx(s, 9, 20)], 1, 'trail persists after return');
 });
 test('second sortie can ride the grid then extend beyond it', () => {
-  const s = G.newGame();
+  const s = fresh();
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 9, 20)]);
   run(s, 3);
   ok(G.cmdMoveTo(s, 12, 20));
@@ -112,13 +117,13 @@ test('second sortie can ride the grid then extend beyond it', () => {
   ok(fac(s, 'F').connected, 'factory connected by cable');
 });
 test('path plan reports battery cost and reachable prefix', () => {
-  const s = G.newGame();
+  const s = fresh();
   const p = G.planPath(s, 12, 20);
   ok(p.cost > 10, 'factory is out of reach on sortie 1');
   ok(p.reach < p.path.length);
 });
 test('"go there" walks toward a building and stops next to it', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.ex.battery = 99;
   ok(G.cmdGoAdjacent(s, fac(s, 'F').tiles));
   run(s, 4);
@@ -126,7 +131,7 @@ test('"go there" walks toward a building and stops next to it', () => {
   ok(G.adjacentTo(s, fac(s, 'F').tiles, s.ex.x, s.ex.y), 'explorer stands next to the factory');
 });
 test('loose scrap is collected when stepped on', () => {
-  const s = G.newGame();
+  const s = fresh();
   walk(s, [[5, 26], [6, 26], [6, 25], [7, 25]]);
   eq(s.res.scrap, BAL.scrapPile);
   ok(!s.items[idx(s, 7, 25)]);
@@ -134,7 +139,7 @@ test('loose scrap is collected when stepped on', () => {
 
 console.log('\nOld grid, breaks & lamps');
 test('touching an old line energizes it up to the break (cascade)', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.ex.battery = 99;
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 14, 20)]);
   eq(s.powered[idx(s, 19, 21)], 0);
@@ -146,7 +151,7 @@ test('touching an old line energizes it up to the break (cascade)', () => {
   ok(!G.exStepInfo(s, idx(s, 20, 21)).ok, 'break is impassable for the explorer');
 });
 test('repairing a break lets the cascade continue', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.ex.battery = 99;
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 15, 20)]);
   G.repairBreak(s, idx(s, 20, 21));
@@ -155,13 +160,13 @@ test('repairing a break lets the cascade continue', () => {
 
 console.log('\nFacilities, robots & economy');
 function setupFactory() {
-  const s = G.newGame();
+  const s = fresh();
   s.ex.battery = 99;
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 12, 20)]);
   return s;
 }
 test('factory needs connection and scrap, then wakes a robot and adds power', () => {
-  const s = G.newGame();
+  const s = fresh();
   const F = fac(s, 'F');
   ok(!G.orderRestore(s, F.id).ok, 'cannot restore unconnected');
   const s2 = setupFactory(); const F2 = fac(s2, 'F');
@@ -186,7 +191,7 @@ test('miner + hauler deliver scrap to the dock along the grid', () => {
   ok(s.res.scrap > before, 'storage grew');
 });
 test('robots can cross the dock between cable branches leaving different sides', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.ex.battery = 99;
   // branch A leaves the dock to the north and reaches the heap at (5,18)
   walk(s, [[4, 25], [4, 24], [5, 24], [6, 24], [6, 23], [6, 22], [6, 21], [6, 20], [6, 19], [6, 18]]);
@@ -216,7 +221,11 @@ test('repair robot restores a facility with work over time', () => {
   const s = setupFactory();
   s.res.scrap = 100; s.res.crystal = 20;
   G.orderRestore(s, fac(s, 'F').id);
-  walk(s, [...line(12, 20, 7, 20), ...line(7, 20, 7, 13), ...line(7, 13, 17, 13)]); // radar at (17,14)
+  walk(s, [...line(12, 20, 7, 20), ...line(7, 20, 7, 13)]);
+  G.cmdReturn(s); run(s, 2);
+  G.cmdMoveTo(s, 7, 13); run(s, 3);
+  ok(G.buildRelay(s).ok, 'relay at the edge of the dock reach');
+  walk(s, line(7, 13, 17, 13)); // radar at (17,14)
   const R = fac(s, 'R');
   ok(R.connected);
   ok(G.orderRestore(s, R.id).ok);
@@ -248,7 +257,7 @@ test('"-" sends a robot back to idle and "+" reuses it without cost', () => {
 
 console.log('\nUpgrades & ending');
 test('upgrades cost resources and change abilities', () => {
-  const s = G.newGame();
+  const s = fresh();
   s.res.scrap = 100; s.res.crystal = 20;
   ok(!G.buyUpgrade(s, 'bat2').ok, 'bat2 locked behind bat1');
   ok(G.buyUpgrade(s, 'bat1').ok); eq(G.maxBattery(s), 13);
@@ -257,14 +266,14 @@ test('upgrades cost resources and change abilities', () => {
   eq(s.res.scrap, 100 - 10 - 16 - MD.UPGRADES.find((u) => u.id === 'hover').cost.scrap);
 });
 test('reactor requires all three substations', () => {
-  const s = G.newGame();
+  const s = fresh();
   const X = fac(s, 'X'); X.connected = true; s.res.scrap = 999; s.res.crystal = 999;
   ok(!G.canRestore(s, X).ok);
   for (const ch of ['1', '2', '3']) G.activate(s, fac(s, ch));
   ok(G.canRestore(s, X).ok);
 });
 test('ignition happens when the explorer reaches the ready reactor', () => {
-  const s = G.newGame();
+  const s = fresh();
   const X = fac(s, 'X'); X.state = 'ready';
   s.ex.x = 34; s.ex.y = 4;
   run(s, 0.1);
@@ -278,6 +287,121 @@ test('save/load roundtrip via JSON keeps the game running', () => {
   run(copy, 5);
   eq(copy.facilities[fac(s, 'F').id].state, 'active');
   ok(copy.time > s.time);
+});
+
+console.log('\nProvisional cable & live floors');
+test('provisional cable is anchored the moment it reaches a deposit', () => {
+  const s = fresh();
+  walk(s, [[4, 25], [4, 24], [5, 24], [6, 24], [6, 23], [6, 22], [6, 21], [6, 20], [6, 19]]);
+  eq(s.cable[idx(s, 6, 23)], 2);
+  walk(s, [[6, 18]]); // next to the heap at (5,18)
+  eq(s.cable[idx(s, 6, 23)], 1, 'whole trail committed');
+  ok(s.deposits[s.depAt[idx(s, 5, 18)]].connected, 'heap connected at once');
+  eq(s.ex.temp.length, 0);
+});
+test('a hidden live floor drains extra battery and becomes known', () => {
+  const s = fresh();
+  const i = idx(s, 6, 25);
+  s.hz[i] = 1;
+  walk(s, [[5, 26], [6, 26], [6, 25]]);
+  eq(s.ex.battery, 10 - 1 - 1 - BAL.hazardDrain);
+  ok(s.hzKnown[i], 'now known');
+  eq(s.ex.mode, 'out');
+  const j = idx(s, 6, 24); s.hz[j] = 1; s.hzKnown[j] = 1;
+  eq(G.exStepInfo(s, j).cost, 1 + BAL.hazardDrain, 'known floors are priced into plans');
+});
+test('overdrawing on a live floor burns out the provisional cable and drops the pickups', () => {
+  const s = fresh();
+  const hz = idx(s, 7, 20);
+  s.hz[hz] = 1;
+  walk(s, [[5, 26], [6, 26], [6, 25], [7, 25], ...line(7, 25, 7, 20)]); // picks up scrap at (7,25)
+  eq(s.ex.mode, 'shorted');
+  run(s, BAL.shortDelay + 0.2);
+  eq(s.ex.mode, 'home'); eq(s.ex.battery, G.maxBattery(s));
+  eq(s.cable[idx(s, 6, 26)], 0); eq(s.cable[idx(s, 7, 21)], 0);
+  ok(s.items[idx(s, 7, 25)], 'scrap dropped back where it was');
+  eq(s.res.scrap, 0);
+  ok(s.hzKnown[hz], 'the live floor stays known');
+  eq(s.stats.recalls, 1);
+});
+test('a known live floor is never stepped on without the battery for it', () => {
+  const s = fresh();
+  const j = idx(s, 6, 24); s.hz[j] = 1; s.hzKnown[j] = 1;
+  walk(s, [[5, 26], [6, 26], [6, 25]]);
+  s.ex.battery = BAL.hazardDrain;
+  walk(s, [[6, 24]]);
+  eq(s.ex.y, 25, 'refused'); eq(s.ex.mode, 'out');
+});
+test('the scanner exposes live floors around the explorer', () => {
+  const s = fresh();
+  const j = idx(s, 9, 20); s.hz[j] = 1;
+  G.revealAround(s, 8, 20);
+  ok(!s.hzKnown[j], 'not without the scanner');
+  s.upgrades.scanner = true;
+  G.revealAround(s, 8, 20);
+  ok(s.hzKnown[j]);
+});
+test('live floors are placed only on plain streets away from the dock and from goals', () => {
+  for (let seed = 1; seed <= 20; seed++) {
+    const s = G.newGame({ seed });
+    const d = G.dock(s);
+    let n = 0;
+    for (let i = 0; i < s.hz.length; i++) {
+      if (!s.hz[i]) continue;
+      n++;
+      const x = i % s.W, y = (i / s.W) | 0;
+      ok(s.tile[i] === G.T.STREET && !s.old[i] && !s.items[i], 'plain street ' + x + ',' + y);
+      ok(Math.abs(x - d.x - 1) + Math.abs(y - d.y - 1) > BAL.hazardSafeRadius, 'away from the dock');
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const k = (y + dy) * s.W + x + dx;
+        if (k === i) continue;
+        ok(s.facAt[k] < 0 && s.depAt[k] < 0 && !s.hz[k], 'nothing important next to ' + x + ',' + y);
+      }
+    }
+    ok(n >= 8 && n <= 60, 'seed ' + seed + ': ' + n + ' live floors');
+  }
+});
+
+console.log('\nPower reach & relay towers');
+function trailToRow13(s) {
+  s.ex.battery = 99;
+  walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 7, 20), ...line(7, 20, 7, 13), ...line(7, 13, 11, 13)]);
+  G.cmdReturn(s); run(s, 2);
+}
+test('cable beyond the dock reach carries no power', () => {
+  const s = fresh();
+  trailToRow13(s);
+  eq(s.volt[idx(s, 9, 13)], 0); eq(s.powered[idx(s, 9, 13)], 1);
+  eq(s.volt[idx(s, 10, 13)], -1); eq(s.powered[idx(s, 10, 13)], 0);
+});
+test('a relay tower restarts the reach; it must stand on live cable and costs more each time', () => {
+  const s = fresh();
+  trailToRow13(s);
+  s.res.scrap = 100;
+  G.cmdMoveTo(s, 10, 13); run(s, 3);
+  ok(!G.buildRelay(s).ok, 'not on a dead line');
+  G.cmdMoveTo(s, 9, 13); run(s, 3);
+  ok(G.buildRelay(s).ok);
+  eq(s.res.scrap, 100 - BAL.relayCost);
+  eq(s.volt[idx(s, 10, 13)], BAL.relayReach - 1);
+  ok(s.powered[idx(s, 11, 13)]);
+  ok(!G.buildRelay(s).ok, 'one per tile');
+  eq(G.relayCost(s).scrap, BAL.relayCost + BAL.relayStep);
+});
+test('old city lines carry power without loss', () => {
+  const s = fresh();
+  s.ex.battery = 99;
+  walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 15, 20)]);
+  ok(s.powered[idx(s, 15, 21)]);
+  eq(s.volt[idx(s, 19, 21)], s.volt[idx(s, 15, 21)]);
+});
+test('an active substation becomes a power source', () => {
+  const s = fresh();
+  const sub = fac(s, '1'), i = idx(s, 41, 24);
+  eq(s.powered[i], 0);
+  sub.connected = true; G.activate(s, sub);
+  eq(s.powered[i], 1);
+  eq(s.volt[i], MD.FAC['1'].reach);
 });
 
 console.log('\nFull playthrough (scripted bot)');

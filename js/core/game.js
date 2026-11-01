@@ -8,13 +8,16 @@
 
   // ------------------------------------------------------------------ creation
 
-  G.newGame = function () {
+  // cable[i]: 0 none, 1 permanent, 2 provisional (laid this sortie, not yet conducting)
+  G.newGame = function (opts) {
+    opts = opts || {};
     const rows = MD.MAP, H = rows.length, W = rows[0].length, N = W * H;
     const fill = (v) => new Array(N).fill(v);
     const s = {
-      v: 1, W, H, time: 0, seed: 12345,
+      v: 2, W, H, time: 0, seed: opts.seed != null ? opts.seed : (Math.random() * 1e9) | 0,
       tile: fill(T.BUILDING), old: fill(0), buried: fill(0), cable: fill(0),
-      powered: fill(0), pdist: fill(-1), revealed: fill(0),
+      powered: fill(0), pdist: fill(-1), volt: fill(-99), revealed: fill(0),
+      hz: fill(0), hzKnown: fill(0), hzN: fill(0), relays: [],
       lampAt: fill(-1), facAt: fill(-1), depAt: fill(-1),
       items: {}, lamps: [], breaks: {}, facilities: [], deposits: [], conveyor: null,
       robots: [], nextRobotId: 1, buildQueue: [], reserve: 0,
@@ -23,7 +26,7 @@
       ex: null,
       stats: {
         sorties: 0, cables: 0, robotsBuilt: 0, robotsFound: 0, pickups: 0,
-        delivered: { scrap: 0, crystal: 0 }, recent: [], cascades: 0,
+        delivered: { scrap: 0, crystal: 0 }, recent: [], cascades: 0, recalls: 0, lostTiles: 0,
       },
       flags: {},
       districtLight: { sw: 0.06, ind: 0, nw: 0, core: 0 },
@@ -136,8 +139,9 @@
       x: dock.x + 1, y: dock.y + 1, fx: dock.x + 1, fy: dock.y + 1,
       path: [], keyq: [], goal: null, moving: false, from: null, to: null, stepT: 0, stepDur: 0, stepInfo: null,
       battery: BAL.startBattery, mode: 'home', facing: 1, idleT: 0, ret: null,
-      cells: 0, batBonus: 0, sortie: G.freshSortie(),
+      cells: 0, batBonus: 0, sortie: G.freshSortie(), temp: [], undo: [], shortT: 0,
     };
+    if (opts.hazards !== false) placeHazards(s);
     for (const i of dock.tiles) G.revealTile(s, i);
     G.revealAround(s, s.ex.x, s.ex.y, BAL.revealRadius + 1.6);
     G.recomputeGrid(s, true);
@@ -145,7 +149,35 @@
     return s;
   };
 
-  G.freshSortie = () => ({ newTiles: 0, scrap: 0, crystal: 0, found: [] });
+  G.freshSortie = () => ({ newTiles: 0, scrap: 0, crystal: 0, found: [], lost: 0 });
+
+  // Live floors: hidden on plain streets, kept away from the dock and from anything worth reaching
+  // so that the hazard is always a choice about the route, never about the goal itself.
+  function placeHazards(s) {
+    const W = s.W, H = s.H, d = G.dock(s);
+    const dcx = d.x + 1, dcy = d.y + 1;
+    const near8 = (i, pred) => {
+      const x = i % W, y = (i / W) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy;
+        if (G.inb(s, nx, ny) && pred(ny * W + nx)) return true;
+      }
+      return false;
+    };
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      if (s.tile[i] !== T.STREET || s.old[i] || s.items[i]) continue;
+      if (Math.abs(x - dcx) + Math.abs(y - dcy) <= BAL.hazardSafeRadius) continue;
+      if (near8(i, (n) => s.facAt[n] >= 0 || s.depAt[n] >= 0 || !!s.items[n] || s.hz[n])) continue;
+      if (G.rand(s) < BAL.hazardRate) s.hz[i] = 1;
+    }
+    for (let i = 0; i < W * H; i++) {
+      let n = 0;
+      near8(i, (k) => { n += s.hz[k]; return false; });
+      s.hzN[i] = n;
+    }
+  }
 
   // ------------------------------------------------------------------ queries
 
@@ -228,12 +260,16 @@
   };
 
   G.revealAround = function (s, cx, cy, r) {
+    const scan = r == null && s.upgrades.scanner; // the explorer's own scanner also exposes live floors
     if (r == null) r = s.upgrades.scanner ? BAL.scannerRadius : BAL.revealRadius;
     const R = Math.ceil(r);
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
       if (dx * dx + dy * dy > r * r) continue;
       const x = cx + dx, y = cy + dy;
-      if (G.inb(s, x, y)) G.revealTile(s, y * s.W + x);
+      if (!G.inb(s, x, y)) continue;
+      const i = y * s.W + x;
+      G.revealTile(s, i);
+      if (scan && s.hz[i] && !s.hzKnown[i]) s.hzKnown[i] = 1;
     }
     // distant facilities start broadcasting a beacon when the explorer comes close
     for (const f of s.facilities) {
@@ -248,22 +284,47 @@
 
   // ------------------------------------------------------------------ power grid
 
+  // Power sources: the dock, active substations and relay towers each push power a limited number
+  // of tiles of new cable (their reach); the old city lines carry it without loss.
+  // volt[i] is the reach left at tile i: powered when >= 0, NO_VOLT when no source reaches it at all.
+  const NO_VOLT = -99;
+  G.NO_VOLT = NO_VOLT;
+  G.sourceReach = (f) => (f.state === 'active' && G.def(f).reach) || 0;
+  const lossOf = (s, i) => (s.old[i] === 1 ? 0 : 1);
+
   G.recomputeGrid = function (s, silent) {
     const W = s.W, N = W * s.H;
     const prev = s.powered;
-    const pw = new Array(N).fill(0), pd = new Array(N).fill(-1);
-    const q = [];
-    for (const d of G.dock(s).tiles) {
-      for (const n of G.neighborsOf(s, d)) {
-        if (!pw[n] && G.isConductive(s, n)) { pw[n] = 1; pd[n] = 1; q.push(n); }
-      }
+    const volt = new Array(N).fill(NO_VOLT);
+    const seeds = [];
+    const seed = (i, v) => {
+      if (G.isConductive(s, i) && v > volt[i]) { volt[i] = v; seeds.push(i); }
+    };
+    for (const f of s.facilities) {
+      const r = G.sourceReach(f);
+      if (!r) continue;
+      for (const t of f.tiles) for (const n of G.neighborsOf(s, t)) seed(n, r - lossOf(s, n));
     }
+    for (const r of s.relays) seed(r, BAL.relayReach);
+    const q = seeds.slice();
     for (let h = 0; h < q.length; h++) {
       const c = q[h];
       for (const n of G.neighborsOf(s, c)) {
-        if (!pw[n] && G.isConductive(s, n)) { pw[n] = 1; pd[n] = pd[c] + 1; q.push(n); }
+        if (!G.isConductive(s, n)) continue;
+        const v = volt[c] - lossOf(s, n);
+        if (v > volt[n]) { volt[n] = v; q.push(n); }
       }
     }
+    const pw = new Array(N).fill(0), pd = new Array(N).fill(-1);
+    for (let i = 0; i < N; i++) if (volt[i] >= 0) pw[i] = 1;
+    // hop distance from the nearest source, only for the travelling-light animation
+    const hq = [];
+    for (const i of seeds) if (pw[i] && pd[i] < 0) { pd[i] = 1; hq.push(i); }
+    for (let h = 0; h < hq.length; h++) {
+      const c = hq[h];
+      for (const n of G.neighborsOf(s, c)) if (pw[n] && pd[n] < 0) { pd[n] = pd[c] + 1; hq.push(n); }
+    }
+    s.volt = volt;
     const newly = [];
     for (let i = 0; i < N; i++) if (pw[i] && !prev[i]) newly.push(i);
     s.powered = pw;
@@ -313,9 +374,11 @@
   G.exStepInfo = function (s, i) {
     if (G.isDockTile(s, i)) return { ok: true, cost: 0, kind: 'dock' };
     if (s.old[i] === 2) return { ok: false, why: 'break' };
-    if (G.isConductive(s, i)) return { ok: true, cost: 0, kind: 'grid' };
+    if (G.isConductive(s, i) || s.cable[i] === 2) return { ok: true, cost: 0, kind: 'grid' };
     const t = s.tile[i];
-    if (t === T.STREET) return { ok: true, cost: 1, kind: 'new' };
+    if (t === T.STREET) {
+      return s.hz[i] && s.hzKnown[i] ? { ok: true, cost: 1 + BAL.hazardDrain, kind: 'hazard' } : { ok: true, cost: 1, kind: 'new' };
+    }
     if (t === T.RUBBLE) return s.upgrades.drill ? { ok: true, cost: 2, kind: 'rubble' } : { ok: false, why: 'rubble' };
     if (t === T.CANAL) return s.upgrades.hover ? { ok: true, cost: 1, kind: 'canal' } : { ok: false, why: 'canal' };
     return { ok: false, why: t === T.DEPOSIT ? 'deposit' : t === T.FACILITY ? 'facility' : t === T.CONVEYOR ? 'conveyor' : 'wall' };
@@ -415,7 +478,19 @@
     return true;
   };
 
-  G.canCommand = (s) => !s.won && s.ex.mode !== 'returning';
+  G.canCommand = (s) => !s.won && s.ex.mode !== 'returning' && s.ex.mode !== 'shorted';
+
+  // A tile the explorer has not proven safe and that a spark hint (or darkness) leaves in doubt.
+  G.maybeHazard = function (s, i) {
+    if (s.cable[i] || s.old[i] || s.hzKnown[i] || s.tile[i] !== T.STREET && s.revealed[i]) return false;
+    if (!s.revealed[i]) return true;
+    const x = i % s.W, y = (i / s.W) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if ((dx || dy) && G.inb(s, nx, ny) && s.revealed[ny * s.W + nx] && s.hzN[ny * s.W + nx]) return true;
+    }
+    return false;
+  };
 
   G.cmdMoveTo = function (s, tx, ty) {
     if (!G.canCommand(s)) return false;
@@ -469,7 +544,7 @@
       if (G.isDockTile(s, c)) { goal = c; break; }
       for (const n of G.neighborsOf(s, c)) {
         if (prev[n] !== -2) continue;
-        if (!(G.isConductive(s, n) || G.isDockTile(s, n))) continue;
+        if (!(G.isConductive(s, n) || s.cable[n] === 2 || G.isDockTile(s, n))) continue;
         prev[n] = c; q.push(n);
       }
     }
@@ -494,8 +569,66 @@
     return true;
   };
 
+  // Provisional cable becomes permanent once the explorer gets home, or as soon as it reaches
+  // something that holds it in place: a facility, a deposit or an old city line.
+  function commitTemp(s) {
+    const e = s.ex;
+    if (!e.temp.length) return;
+    for (const i of e.temp) if (s.cable[i] === 2) s.cable[i] = 1;
+    s.events.push({ type: 'commit', tiles: e.temp.slice() });
+    e.temp = [];
+    e.undo = [];
+    G.recomputeGrid(s);
+    G.releaseReserve(s);
+  }
+
+  G.anchorAt = function (s, i) {
+    for (const n of [i].concat(G.neighborsOf(s, i))) {
+      if (s.depAt[n] >= 0 || s.old[n] === 1) return true;
+      if (s.facAt[n] >= 0 && s.facAt[n] !== 0) return true;
+    }
+    return false;
+  };
+
+  // Overdrawn on a live floor: the provisional cable burns out and what was picked up
+  // since the last anchor is dropped where it was found. What was seen stays known.
+  function shortOut(s, i) {
+    const e = s.ex;
+    e.battery = 0;
+    e.mode = 'shorted';
+    e.shortT = 0;
+    e.path = []; e.keyq = []; e.goal = null;
+    s.events.push({ type: 'short', x: i % s.W, y: (i / s.W) | 0, tiles: e.temp.slice() });
+  }
+
+  function recall(s) {
+    const e = s.ex;
+    const lost = e.temp.length;
+    for (const i of e.temp) if (s.cable[i] === 2) s.cable[i] = 0;
+    for (const u of e.undo) {
+      if (u.item) s.items[u.i] = u.item;
+      if (u.scrap) s.res.scrap = Math.max(0, s.res.scrap - u.scrap);
+      if (u.crystal) s.res.crystal = Math.max(0, s.res.crystal - u.crystal);
+      if (u.cell) e.cells = Math.max(0, e.cells - 1);
+    }
+    s.stats.cables -= lost;
+    s.stats.lostTiles += lost;
+    s.stats.recalls++;
+    e.sortie.lost = lost;
+    e.sortie.newTiles = Math.max(0, e.sortie.newTiles - lost);
+    e.sortie.scrap = 0; e.sortie.crystal = 0;
+    const from = { x: e.x, y: e.y };
+    e.temp = []; e.undo = [];
+    const d = G.dock(s);
+    e.x = d.x + 1; e.y = d.y + 1; e.fx = e.x; e.fy = e.y;
+    e.moving = false;
+    s.events.push({ type: 'recalled', from, lost });
+    arriveHome(s);
+  }
+
   function arriveHome(s) {
     const e = s.ex;
+    commitTemp(s);
     const max = G.maxBattery(s);
     s.events.push({ type: 'recharge', summary: e.sortie, from: e.battery, to: max });
     e.battery = max;
@@ -544,24 +677,35 @@
     e.moving = false;
     const i = e.y * s.W + e.x;
     if (info.cost > 0) {
-      e.battery -= info.cost;
+      let cost = info.cost;
+      if (s.hz[i] && !s.hzKnown[i]) {
+        s.hzKnown[i] = 1;
+        cost += BAL.hazardDrain;
+        s.stats.shocks = (s.stats.shocks || 0) + 1;
+        s.events.push({ type: 'shock', x: e.x, y: e.y, drain: BAL.hazardDrain });
+      }
+      G.revealAround(s, e.x, e.y);
+      if (cost > e.battery) { shortOut(s, i); return; }
+      e.battery -= cost;
       if (info.kind === 'rubble') {
         s.tile[i] = T.STREET;
         s.res.scrap += BAL.rubbleScrap;
+        e.undo.push({ scrap: BAL.rubbleScrap });
         s.events.push({ type: 'rubble', x: e.x, y: e.y, amount: BAL.rubbleScrap });
       }
-      s.cable[i] = 1;
+      s.cable[i] = 2;
+      e.temp.push(i);
       s.stats.cables++;
       e.sortie.newTiles++;
       s.events.push({ type: 'lay', x: e.x, y: e.y, kind: info.kind, battery: e.battery });
-      G.recomputeGrid(s);
       if (e.battery <= 0) s.events.push({ type: 'batteryEmpty', x: e.x, y: e.y });
     } else {
       s.events.push({ type: 'glide', x: e.x, y: e.y });
+      G.revealAround(s, e.x, e.y);
     }
-    G.revealAround(s, e.x, e.y);
     pickup(s, i);
     if (G.isDockTile(s, i) && e.mode === 'out') arriveHome(s);
+    else if (e.temp.length && G.anchorAt(s, i)) commitTemp(s);
   }
 
   function pickup(s, i) {
@@ -573,13 +717,16 @@
     switch (it.kind) {
       case 'scrap':
         s.res.scrap += it.amount; e.sortie.scrap += it.amount;
+        if (e.temp.length) e.undo.push({ i, item: it, scrap: it.amount });
         s.events.push({ type: 'pickup', kind: 'scrap', amount: it.amount, x, y });
         break;
       case 'crystal':
         s.res.crystal += it.amount; e.sortie.crystal += it.amount;
+        if (e.temp.length) e.undo.push({ i, item: it, crystal: it.amount });
         s.events.push({ type: 'pickup', kind: 'crystal', amount: it.amount, x, y });
         break;
       case 'cell':
+        if (e.temp.length) e.undo.push({ i, item: it, cell: true });
         e.cells++;
         e.battery += BAL.cellBonus;
         s.events.push({ type: 'cell', x, y });
@@ -590,7 +737,11 @@
         break;
       case 'bot':
         s.stats.robotsFound++;
-        if (G.robotTotal(s) < G.powerCap(s)) {
+        if (!s.powered[i]) {
+          // found at the end of a provisional line: it heads for the base once the line holds
+          s.reserve++;
+          s.events.push({ type: 'rescueWait', x, y });
+        } else if (G.robotTotal(s) < G.powerCap(s)) {
           const r = MD.Robots.spawn(s, i, 'idle');
           s.events.push({ type: 'rescue', rid: r.id, x, y });
         } else {
@@ -603,6 +754,11 @@
 
   function updateExplorer(s, dt) {
     const e = s.ex;
+    if (e.mode === 'shorted') {
+      e.shortT += dt;
+      if (e.shortT >= BAL.shortDelay) recall(s);
+      return;
+    }
     if (e.mode === 'returning') {
       const r = e.ret;
       r.t += dt;
@@ -704,6 +860,7 @@
     }
     G.releaseReserve(s);
     s.events.push({ type: 'restored', fac: f.id });
+    if (def.reach) G.recomputeGrid(s); // a new power source
     s.restoration = G.computeRestoration(s);
   };
 
@@ -757,7 +914,7 @@
 
   function checkIgnite(s) {
     const X = G.reactor(s), e = s.ex;
-    if (!X || X.state !== 'ready' || s.won || e.mode === 'returning' || e.moving) return;
+    if (!X || X.state !== 'ready' || s.won || e.mode === 'returning' || e.mode === 'shorted' || e.moving) return;
     if (!G.adjacentTo(s, X.tiles, e.x, e.y)) return;
     X.state = 'ignited';
     s.won = true;
@@ -787,6 +944,36 @@
     if (u.battery) { s.ex.batBonus += u.battery; s.ex.battery += u.battery; }
     if (id === 'scanner') G.revealAround(s, s.ex.x, s.ex.y);
     s.events.push({ type: 'upgrade', id });
+    return { ok: true };
+  };
+
+  // Relay tower: placed by the explorer on a live, permanent line; power restarts at full reach.
+  G.relayCost = (s) => ({ scrap: BAL.relayCost + BAL.relayStep * s.relays.length });
+
+  G.relayCheck = function (s, i) {
+    if (i == null) i = s.ex.y * s.W + s.ex.x;
+    if (s.won) return { ok: false, why: '' };
+    if (s.ex.mode === 'returning' || s.ex.mode === 'shorted') return { ok: false, why: '移動中は置けない' };
+    if (s.relays.indexOf(i) >= 0) return { ok: false, why: 'ここにはもう中継塔がある' };
+    if (s.cable[i] === 2) return { ok: false, why: '仮設ケーブルの上には置けない（確定させてから）' };
+    if (!G.isConductive(s, i)) return { ok: false, why: '送電網の上に立って置く' };
+    if (!s.powered[i]) return { ok: false, why: 'ここは電気が届いていない（届いている所に置く）' };
+    if (s.volt[i] >= BAL.relayReach) return { ok: false, why: '電気が十分に届いている（電圧の低い所に置こう）' };
+    const cost = G.relayCost(s);
+    if (!U.canAfford(s.res, cost)) return { ok: false, why: 'スクラップが足りない（' + U.costText(cost) + '）' };
+    return { ok: true, cost };
+  };
+
+  G.buildRelay = function (s) {
+    const e = s.ex;
+    if (e.moving) return { ok: false, why: '移動中は置けない' };
+    const i = e.y * s.W + e.x;
+    const chk = G.relayCheck(s, i);
+    if (!chk.ok) return chk;
+    U.pay(s.res, chk.cost);
+    s.relays.push(i);
+    s.events.push({ type: 'relay', x: e.x, y: e.y, i });
+    G.recomputeGrid(s);
     return { ok: true };
   };
 
@@ -885,7 +1072,7 @@
       if (!F.connected) {
         return { id: 'reachFactory', title: '工場の救難信号へ向かえ', target: F.id,
           text: s.stats.sorties <= 1
-            ? '新しい地面を1歩進むごとにバッテリーを1消費し、送電ケーブルが残る。'
+            ? '新しい地面を1歩進むごとにバッテリーを1消費し、仮設ケーブルが残る。基地に帰るか施設につなぐと確定する。'
             : 'ケーブルの上はバッテリーを使わずに走れる。ケーブルの先から続きを伸ばそう。' };
       }
       return { id: 'restoreFactory', title: 'ロボット工場を再起動せよ', target: F.id,
