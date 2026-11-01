@@ -12,7 +12,7 @@
   UI.init = function (handlers) {
     H = handlers;
     $('btn-return').onclick = () => H.returnHome();
-    $('btn-relay').onclick = () => H.buildRelay();
+    $('btn-relay').onclick = () => H.toggleRelayMode();
     $('btn-speed').onclick = () => H.cycleSpeed();
     $('btn-sound').onclick = () => H.toggleSound();
     $('btn-help').onclick = () => H.showHelp();
@@ -148,7 +148,7 @@
     const L = s.lampAt[i] >= 0 ? s.lamps[s.lampAt[i]] : null;
     const spark = s.hzN[i] && !s.hz[i] ? '<br><span class="warn">火花：周囲8マスに漏電床が ' + s.hzN[i] + ' 個</span>' : '';
     const live = s.hz[i] && s.hzKnown[i];
-    if (s.relays.indexOf(i) >= 0) return '<b>中継塔</b> — ここから' + MD.BAL.relayReach + 'マス先まで送電する';
+    if (s.relays.indexOf(i) >= 0) return '<b>中継塔</b> — ここから' + MD.BAL.relayReach + 'マス先まで送電する（維持 ⚡' + MD.BAL.relayUpkeep + '）';
     if (s.cable[i] === 2) {
       return '<b>仮設ケーブル</b> — 基地に帰るか、施設・資源・古い送電線につなぐと確定' +
         '<br><span class="ng">漏電床でバッテリーが尽きると焼き切れる</span>' + spark;
@@ -196,10 +196,10 @@
     setText('mode-text', e.mode === 'home' ? '基地で待機（充電済み）' : e.mode === 'returning' ? '帰還中…' : e.mode === 'shorted' ? '過放電！ 緊急回収中…' : '出撃中 #' + s.stats.sorties);
     $('btn-return').disabled = e.mode !== 'out';
     setText('temp-num', e.temp.length ? '仮設 ' + e.temp.length : '');
-    const relayChk = G.relayCheck(s), rb = $('btn-relay');
-    setText('btn-relay', '中継塔 ⚙' + G.relayCost(s).scrap);
-    rb.disabled = !relayChk.ok;
-    rb.title = (relayChk.ok ? 'ホタルの足元に中継塔を建てる' : relayChk.why || '中継塔') + ' [B]';
+    const rb = $('btn-relay');
+    setText('btn-relay', (UI.relayMode ? '配置中… ' : '中継塔 ') + '⚙' + G.relayCost(s).scrap);
+    rb.classList.toggle('on', !!UI.relayMode);
+    rb.title = (UI.relayMode ? 'クリックで配置／右クリック・Escでやめる' : '中継塔を置く場所を選ぶ（電気の届いているケーブルの上）') + ' [B]';
     const sc = Math.floor(s.res.scrap), cr = Math.floor(s.res.crystal);
     if (lastSig.sc != null && sc > lastSig.sc) UI.bump('r-scrap');
     if (lastSig.cr != null && cr > lastSig.cr) UI.bump('r-crystal');
@@ -209,7 +209,17 @@
     const rs = G.ratePerMin(s, 'scrap'), rc = G.ratePerMin(s, 'crystal');
     setText('r-scrap-rate', rs >= 1 ? '+' + Math.round(rs) + '/分' : '');
     setText('r-crystal-rate', rc >= 1 ? '+' + Math.round(rc) + '/分' : '');
-    setText('r-power', G.robotTotal(s) + '/' + G.powerCap(s));
+    const sup = G.supply(s), dem = G.demand(s), cov = G.coverage(s);
+    const pw = $('res-power');
+    pw.classList.toggle('short', cov < 1 && !s.tripT);
+    pw.classList.toggle('trip', s.tripT > 0);
+    setText('r-power', dem + '/' + sup);
+    setText('r-power-sub', s.tripT > 0 ? '停電 ' + Math.ceil(s.tripT) + '秒' : cov < 1 ? '作業 ' + Math.round(s.sat * 100) + '%' : '使用/発電');
+    const parts = G.demandParts(s);
+    const label = { scrap: 'スクラップ採掘', crystal: '結晶採掘', haul: '運搬', repair: '修理', relay: '中継塔', conveyor: 'コンベヤー' };
+    pw.title = '電力 ⚡ 使用 ' + dem + ' / 発電 ' + sup + (cov < 1 ? '（不足：作業速度 ' + Math.round(s.sat * 100) + '%）' : '') + '\n' +
+      Object.keys(parts).filter((k) => parts[k]).map((k) => '・' + label[k] + ' ' + parts[k]).join('\n') +
+      '\n発電：' + s.facilities.filter((f) => G.supplyOf(s, f)).map((f) => f.name + ' ' + G.supplyOf(s, f)).join('、');
     const r = Math.floor(s.restoration);
     setText('dawn-num', r + '%');
     $('dawn-fill').style.left = r + '%';
@@ -259,7 +269,10 @@
     if (Object.keys(s.breaks).some((k) => MD.G.neighborsOf(s, +k).some((n) => s.powered[n])) && !G.roleCount(s, 'repair') && G.factory(s).state === 'active') {
       out.push({ t: '断線を見つけた → 修理ロボで直せる' });
     }
-    if (G.robotTotal(s) >= G.powerCap(s) && G.factory(s).state === 'active' && G.activeSubs(s) < 3) out.push({ t: 'ロボット枠が満杯 → 変電所の復旧で増える' });
+    const cov = G.coverage(s);
+    if (s.tripT > 0) out.push({ t: '停電中！ 送電網の復帰まで ' + Math.ceil(s.tripT) + '秒', warn: true });
+    else if (cov < 1) out.push({ t: '電力不足：作業速度 ' + Math.round(s.sat * 100) + '% → 発電所を復旧するか、ロボを待機（−）に', warn: true });
+    else if (G.factory(s).state === 'active' && G.supply(s) - G.demand(s) >= 2 && s.res.scrap >= MD.BAL.robotCost.scrap) out.push({ t: '発電に余裕あり（⚡' + (G.supply(s) - G.demand(s)) + '）→ ロボを増やせる' });
     if (s.ex.mode === 'out' && !s.ex.moving && s.ex.battery > 0 && s.ex.battery < 2) out.push({ t: 'Rで帰還すれば満充電で出直せる' });
     return out.slice(0, 4);
   }
@@ -311,30 +324,34 @@
     const G = MD.G, F = G.factory(s);
     const fActive = F.state === 'active';
     const idle = s.robots.filter((r) => r.role === 'idle').length;
-    const canBuild = fActive && G.robotTotal(s) < G.powerCap(s);
+    const canBuild = fActive;
+    const spare = G.supply(s) - G.demand(s);
     const afford = U.canAfford(s.res, MD.BAL.robotCost);
     const rows = MD.ROLE_ORDER.map((role) => {
       const R = MD.ROLES[role];
       const n = G.roleCount(s, role);
       const st = roleStatus(s, role);
       const plusOk = idle > 0 || (canBuild && afford);
-      const plusTitle = idle > 0 ? '待機中のロボットを割り当てる' : !fActive ? '工場が停止中' : !canBuild ? '電力（ロボット枠）が足りない' : afford ? '新しく製造する（⚙' + MD.BAL.robotCost.scrap + '）' : 'スクラップが足りない';
+      const draw = MD.BAL.upkeep[role];
+      const over = spare < draw ? '（電力不足になる）' : '';
+      const plusTitle = (idle > 0 ? '待機中のロボットを割り当てる' : !fActive ? '工場が停止中' : afford ? '新しく製造する（⚙' + MD.BAL.robotCost.scrap + '）' : 'スクラップが足りない') + ' 使用電力 +' + draw + over;
       return '<div class="rrow"><div class="ri" style="background:' + R.color + '">' + R.icon + '</div>' +
-        '<div class="rn">' + R.name + '</div><div class="rc">' + n + '</div>' +
+        '<div class="rn">' + R.name + '<small>⚡' + draw + '</small></div><div class="rc">' + n + '</div>' +
         '<button data-minus="' + role + '" title="待機に戻す" aria-label="' + R.name + 'を1体減らす"' + (n ? '' : ' disabled') + '>−</button>' +
         '<button class="plus' + (idle ? '' : ' build') + '" data-plus="' + role + '" title="' + plusTitle + '" aria-label="' + R.name + 'を1体増やす"' + (plusOk ? '' : ' disabled') + '>＋</button>' +
         '<div class="rs ' + (st.c || '') + '">' + st.t + '</div></div>';
     }).join('');
-    const sig = rows + idle + s.buildQueue.length;
+    const sig = rows + idle + s.buildQueue.length + ':' + (spare >= 2);
     if (lastSig.robots !== sig) { $('robot-rows').innerHTML = rows; lastSig.robots = sig; }
-    setText('robot-cap', '⚡ ' + G.robotTotal(s) + '/' + G.powerCap(s));
+    setText('robot-cap', '⚡ 使用 ' + G.demand(s) + ' / 発電 ' + G.supply(s));
     let note;
     if (!fActive) note = 'ロボット工場を再起動すると製造できる。';
     else {
       note = '<b>＋</b>：待機ロボを割当／いなければ製造（⚙' + MD.BAL.robotCost.scrap + '）　<b>−</b>：待機に戻す';
       if (idle) note = '<b style="color:#ffcc66">待機中 ' + idle + '体</b> — ' + note;
       if (s.buildQueue.length) note = '<b>製造中 ' + s.buildQueue.length + '体</b> … ' + note;
-      if (s.reserve) note += '<br>電力不足で眠っているロボ：' + s.reserve + '体';
+      if (G.coverage(s) < 1) note = '<b style="color:#ff9a6a">電力不足：作業速度 ' + Math.round(s.sat * 100) + '%</b> — 発電所の復旧か、−で待機に<br>' + note;
+      if (s.reserve) note += '<br>ケーブルの確定を待つ休眠ロボ：' + s.reserve + '体';
     }
     if (lastSig.note !== note) { $('robot-note').innerHTML = note; lastSig.note = note; }
     $('panel-robots').classList.toggle('locked', !fActive && !s.robots.length);
@@ -375,10 +392,9 @@
     const [bc, bt] = STATE_BADGE[f.state] || ['off', ''];
     let h = '<h4>' + f.name + ' <span class="badge ' + bc + '">' + bt + '</span></h4>';
     h += '<div class="desc">' + def.desc + '</div><div class="eff">効果：' + def.effect + '</div>';
-    if (f.kind === 'dock') {
-      h += '<div class="row"><span>ロボット枠</span><span>+' + def.power + '</span></div>';
-      return h;
-    }
+    if (def.power) h += '<div class="row"><span>発電</span><span>⚡' + (def.power + G.genBonus(s)) + (f.state === 'active' ? '' : '（復旧後）') + '</span></div>';
+    if (f.kind === 'conveyor') h += '<div class="row"><span>使用電力</span><span>⚡' + MD.BAL.conveyorUpkeep + '（稼働中）</span></div>';
+    if (f.kind === 'dock') return h;
     if (f.state === 'dormant') {
       if (def.requires) {
         h += '<div class="req">条件：' + def.requires.map((ch) => {

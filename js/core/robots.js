@@ -430,9 +430,12 @@
     r.timer = 0.3 + G().rand(s) * 1.5;
   }
 
-  RB.update = function (s, dt) {
-    for (const r of s.robots) tick(s, r, dt);
-    factoryTick(s, dt);
-    conveyorTick(s, dt);
+  // sat: share of full speed the power supply allows (brownout slows everything, never stops it,
+  // except while the breakers are tripped).
+  RB.update = function (s, dt, sat) {
+    const k = sat == null ? 1 : sat;
+    for (const r of s.robots) tick(s, r, r.role === 'parade' ? dt : dt * k);
+    factoryTick(s, dt * k);
+    conveyorTick(s, dt * k);
   };
 })(typeof window !== 'undefined' ? window : globalThis);

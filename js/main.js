@@ -15,7 +15,7 @@
   let touchMode = false;
   let lastBlocked = { t: -9, i: -1 };
   let endingShown = false;
-  const view = { hover: null, hoverOk: true, plan: null, planLabel: null, selection: null, pointer: null, follow: true, focus: null, touchTarget: null };
+  const view = { hover: null, hoverOk: true, plan: null, planLabel: null, selection: null, pointer: null, follow: true, focus: null, touchTarget: null, relay: null };
   let planKey = '';
 
   // ---------------------------------------------------------------- persistence
@@ -32,7 +32,7 @@
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return null;
       const d = JSON.parse(raw);
-      if (d.v !== 2 || d.W !== MD.MAP[0].length || d.H !== MD.MAP.length) return null;
+      if (d.v !== 3 || d.W !== MD.MAP[0].length || d.H !== MD.MAP.length) return null;
       d.events = [];
       return d;
     } catch (e) { return null; }
@@ -133,7 +133,7 @@
     const robots = s.robots.filter((r) => r.role !== 'parade').length;
     $('end-stats').innerHTML = [
       ['クリアタイム', U.fmtTime(s.wonAt)], ['出撃回数', st.sorties + '回'], ['敷いたケーブル', st.cables + 'マス'],
-      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['中継塔', s.relays.length + '基'], ['緊急回収', (st.recalls || 0) + '回'],
+      ['ロボット', robots + '体'], ['復活した古い送電線', st.cascades + '区間'], ['中継塔', s.relays.length + '基'], ['最大発電', G.supply(s) + '⚡'], ['緊急回収', (st.recalls || 0) + '回'],
       ['回収した記録', s.logsRead.length + '/' + MD.LOGS.length],
     ].map(([k, v]) => '<div>' + k + '<b>' + v + '</b></div>').join('');
     save();
@@ -187,8 +187,32 @@
 
   // ---------------------------------------------------------------- hover & plan preview
 
+  // Relay placement mode: preview which dead cable a tower here would bring to life.
+  function computeRelayPreview(t) {
+    view.relay = null; view.planLabel = null; view.hoverOk = true;
+    if (!t || !G.inb(s, t.x, t.y)) return;
+    const i = t.y * s.W + t.x;
+    const chk = G.relayCheck(s, i);
+    if (!chk.ok) {
+      view.hoverOk = false;
+      if (s.revealed[i] && chk.why) view.planLabel = { x: t.x, y: t.y, text: chk.why, col: '#ff9a8a' };
+      return;
+    }
+    const gain = G.relayGain(s, i);
+    view.relay = { i, gain };
+    view.planLabel = { x: t.x, y: t.y, col: '#8ff8ff',
+      text: '中継塔 ⚙' + chk.cost.scrap + '・維持 ⚡' + MD.BAL.relayUpkeep + (gain.length ? '・新たに通電 ' + gain.length + 'マス' : '・（今は通電が増えない）') };
+  }
+
+  function setRelayMode(on) {
+    UI.relayMode = !!on;
+    view.relay = null;
+    planKey = '';
+  }
+
   function computePlan(t) {
-    view.plan = null; view.planLabel = null; view.hoverOk = true;
+    view.plan = null; view.planLabel = null; view.hoverOk = true; view.relay = null;
+    if (UI.relayMode) { computeRelayPreview(t); return; }
     if (!t || !G.inb(s, t.x, t.y) || !G.canCommand(s)) return;
     const i = t.y * s.W + t.x;
     if (s.facAt[i] >= 0 || s.depAt[i] >= 0) return;
@@ -228,7 +252,7 @@
     if (!t) { view.plan = null; view.planLabel = null; UI.tooltip(0, 0, null); planKey = ''; return; }
     if (!touchMode) UI.tooltip(m.x, m.y, UI.tileInfo(s, t.x, t.y));
     const e = s.ex;
-    const key = t.x + ',' + t.y + '|' + e.x + ',' + e.y + '|' + e.battery + '|' + s.gridVersion + '|' + e.mode + '|' + (e.moving ? e.to.x + ',' + e.to.y : '') + '|' + Object.keys(s.upgrades).length;
+    const key = t.x + ',' + t.y + '|' + e.x + ',' + e.y + '|' + e.battery + '|' + s.gridVersion + '|' + e.mode + '|' + (e.moving ? e.to.x + ',' + e.to.y : '') + '|' + Object.keys(s.upgrades).length + '|' + (UI.relayMode ? 'R' + Math.floor(s.res.scrap) : '');
     if (key !== planKey) { planKey = key; computePlan(t); }
   }
 
@@ -265,6 +289,14 @@
     const t = RV.screenToTile(sx, sy);
     if (!G.inb(s, t.x, t.y)) return;
     const i = t.y * s.W + t.x;
+    if (UI.relayMode) {
+      if (touch && (!view.touchTarget || view.touchTarget.x !== t.x || view.touchTarget.y !== t.y)) { view.touchTarget = t; planKey = ''; return; }
+      view.touchTarget = null;
+      const r = G.buildRelay(s, i);
+      if (r.ok) setRelayMode(false);
+      else { if (r.why) UI.toast(r.why, 'warn'); A.play('deny'); }
+      return;
+    }
     const w = RV.screenToWorld(sx, sy);
     const bot = s.robots.find((r) => r.role !== 'parade' && Math.abs((r.x + 0.5) * TS - w.x) < 7 && Math.abs((r.y + 0.5) * TS - w.y) < 8);
     if (bot && !(t.x === s.ex.x && t.y === s.ex.y)) { select({ robot: bot.id }); return; }
@@ -288,10 +320,11 @@
     if (G.cmdStep(s, dx, dy, repeat)) { view.follow = true; view.focus = null; }
   }
 
-  function buildRelay() {
+  function toggleRelayMode() {
     if (mode !== 'play') return;
-    const r = G.buildRelay(s);
-    if (!r.ok) { if (r.why) UI.toast(r.why, 'warn'); A.play('deny'); }
+    setRelayMode(!UI.relayMode);
+    A.play('click');
+    if (UI.relayMode) once('t_relaymode', () => UI.toast('中継塔を置くケーブルをクリック（右クリック・Escでやめる）。水色のマスが新しく電気の届く範囲。', 'info', 7000));
   }
 
   function returnHome() {
@@ -314,6 +347,7 @@
 
   function escape() {
     if (mode === 'play') {
+      if (UI.relayMode) { setRelayMode(false); return; }
       if (view.selection) { view.selection = null; return; }
       if (!$('logbox').classList.contains('hidden')) { $('logbox').classList.add('hidden'); return; }
       mode = 'pause';
@@ -381,8 +415,13 @@
         RV.shake(1.2);
         A.play('short');
         view.follow = true;
+        UI.banner('停電', '過放電で送電網のブレーカーが落ちた — ' + MD.BAL.tripTime + '秒間、都市が止まる');
         break;
       }
+      case 'tripEnd':
+        A.play('connect');
+        UI.toast('送電網が復帰した', 'info', 2500);
+        break;
       case 'recalled': {
         const [wx, wy] = wpos(ev.from.x, ev.from.y);
         RV.burst(wx, wy, { n: 30, speed: 50, cols: ['#ff6b5b', '#ffb347', '#555'], life: 0.9, g: 20 });
@@ -557,9 +596,7 @@
         if (!ev.factory) UI.toast('休眠ロボットが目覚めた！ 右のパネルで役割を与えよう', 'good');
         break;
       }
-      case 'rescueReserve':
-        UI.toast('ロボットを見つけたが電力が足りない…（ロボット枠が増えると自動で目覚める）', 'warn', 5000);
-        break;
+
       case 'role': {
         const r = s.robots.find((o) => o.id === ev.rid);
         if (r) { const [wx, wy] = wpos(r.x, r.y); RV.floatText(wx, wy - 8, MD.ROLES[ev.role].icon + MD.ROLES[ev.role].short, MD.ROLES[ev.role].color, { life: 1 }); }
@@ -726,7 +763,7 @@
     A.muted = !!p.muted;
     UI.setSoundLabel(!A.muted);
     UI.init({
-      returnHome, buildRelay, cycleSpeed, toggleSound, showHelp,
+      returnHome, toggleRelayMode, cycleSpeed, toggleSound, showHelp,
       pause: () => { if (mode === 'play') { mode = 'pause'; showScreen('pause'); } },
       zoom: (d) => zoom(d),
       centerExplorer: () => centerExplorer(false),
@@ -757,11 +794,11 @@
         else if (mode === 'pause' && code === 'Escape') { mode = 'play'; showScreen(null); }
         else if (mode === 'help' || (mode === 'title' && !$('help').classList.contains('hidden'))) closeHelp();
       },
-      step: onStep, click: onClick, returnHome, buildRelay, cycleSpeed, toggleSound, showHelp, escape,
+      step: onStep, click: onClick, returnHome, toggleRelayMode, cycleSpeed, toggleSound, showHelp, escape,
       zoom: (d, sx, sy) => zoom(d, sx, sy),
       centerExplorer: () => centerExplorer(false),
       panTo: (x, y) => { view.follow = false; view.focus = null; RV.cam.x = x; RV.cam.y = y; RV.clampCam(); },
-      cancel: () => { if (s) { G.cmdStop(s); view.selection = null; view.touchTarget = null; } },
+      cancel: () => { if (s) { G.cmdStop(s); view.selection = null; view.touchTarget = null; setRelayMode(false); } },
     });
     $('btn-new').onclick = () => { A.init(); if (loadSave() && !confirm('保存データを消して最初から始めますか？')) return; newGame(); };
     $('btn-continue').onclick = () => { A.init(); continueGame(); };

@@ -18,12 +18,12 @@
       <div class="hud-block" id="hud-battery">
         <div class="label"><span class="k">BATTERY</span> <span id="mode-text">基地で待機</span></div>
         <div id="pips"></div>
-        <div class="sub"><span id="bat-num">10/10</span><span id="temp-num"></span><button id="btn-return" class="mini" title="基地へ帰還して充電 [R]">帰還 R</button><button id="btn-relay" class="mini" title="ホタルの足元に中継塔を建てる [B]">中継塔 B</button></div>
+        <div class="sub"><span id="bat-num">10/10</span><span id="temp-num"></span><button id="btn-return" class="mini" title="基地へ帰還して充電 [R]">帰還 R</button><button id="btn-relay" class="mini" title="中継塔を置く場所を選ぶ [B]">中継塔 B</button></div>
       </div>
       <div class="hud-block" id="hud-res">
         <div class="res" title="スクラップ：施設の復旧・ロボット製造・強化に使う"><i class="ico scrap"></i><b id="r-scrap">0</b><small id="r-scrap-rate"></small></div>
         <div class="res" title="結晶：高度な強化と変電所・中央動力炉の復旧に使う"><i class="ico crystal"></i><b id="r-crystal">0</b><small id="r-crystal-rate"></small></div>
-        <div class="res" title="電力：同時に動かせるロボットの数"><i class="ico power"></i><b id="r-power">0/2</b><small>ロボ枠</small></div>
+        <div class="res" id="res-power" title="電力"><i class="ico power"></i><b id="r-power">3</b><small id="r-power-sub">発電</small></div>
       </div>
       <div class="hud-block" id="hud-dawn">
         <div class="label"><span class="k">都市復旧</span> <b id="dawn-num">0%</b></div>
@@ -115,17 +115,23 @@
           <ul>
             <li>施設や資源に<b>ケーブルを隣接</b>させると接続される。ただし<b>電気が届く距離</b>には限りがある（基地16マス・変電所14マス）。</li>
             <li>街に眠る<b>古い送電線</b>は損失なしで電気を運ぶ。触れると断線までの区間が一気に復活する。</li>
-            <li>電気が届かない所には、ケーブルの上で<b>B</b>を押して<b>中継塔</b>を建てる（そこから12マス）。近道のケーブルを敷き直すのも手。</li>
+            <li>電気が届かない所には<b>中継塔</b>（<b>B</b>か中継塔ボタンで置き場所を選ぶ。そこから12マス、維持に⚡1）。近道のケーブルを敷き直すのも手。</li>
             <li>ロボットは<b>電気の通った送電網の上しか動けない</b>。網の形が物流の速さを決める。</li>
           </ul>
         </div>
         <div>
+          <h4>電力（⚡）</h4>
+          <ul>
+            <li>基地・<b>発電機</b>・<b>変電所</b>が発電し、ロボット（採掘・運搬⚡1、修理⚡2）・中継塔・コンベヤーが電気を使う。</li>
+            <li>使う量が発電量を超えると<b>都市全体の作業が遅くなる</b>（足りないほど急に遅くなる）。発電所を探して復旧すると都市が一気に元気になる。</li>
+            <li>ホタルの充電は電力を使わない。漏電床で過放電すると、<b>送電網全体が10秒停電</b>する。</li>
+          </ul>
           <h4>ロボットと復旧</h4>
           <ul>
             <li>工場を再起動するとロボットを作れる。右パネルの<b>＋／−</b>で役割を変更。</li>
             <li>採掘ロボが掘った資源は、<b>運搬ロボ</b>が基地へ運ぶまで使えない。</li>
             <li>施設の復旧作業や<b>断線（火花）</b>の修理は<b>修理ロボ</b>の仕事。</li>
-            <li>変電所を復旧すると<b>電力（ロボット枠）</b>と<b>バッテリー</b>が増える。</li>
+            <li>変電所を復旧すると<b>発電</b>と<b>バッテリー</b>が増え、そこから先へ電気が届く。</li>
           </ul>
           <h4>クリア条件</h4>
           <ul>

@@ -6,6 +6,7 @@ const G = MD.G;
 
 const GOALS = [
   { fac: 'F' },
+  { fac: 'G' },                 // west generator, close to the dock
   { dep: [5, 18] },             // scrap heap next to the factory
   { tile: [15, 20] },           // touch the old avenue line -> cascade
   { item: [1, 16] },            // dormant robot
@@ -17,19 +18,23 @@ const GOALS = [
   { need: 'drill', fac: 'conveyor' },
   { need: 'drill', dep: [45, 19] },
   { need: 'drill', fac: '1' },
+  { need: 'drill', fac: 'J' },  // east generator among the live floors
   { need: 'drill', dep: [36, 27] },
   { need: 'drill', tile: [23, 13] },
   { need: 'drill', fac: '3' },
+  { need: 'drill', fac: 'K' },
   { need: 'hover', fac: '2' },
   { need: 'hover', dep: [4, 4] },
+  { need: 'hover', fac: 'H' },
   { need: 'hover', fac: 'X' },
 ];
 
-const RESTORE_ORDER = ['F', '1', '2', '3', 'W', 'conveyor', 'R', 'X'];
-const UPGRADE_ORDER = ['drill', 'bat1', 'hover', 'scanner', 'bat2', 'bat3'];
+const RESTORE_ORDER = ['F', 'G', 'J', '1', 'K', 'H', '2', '3', 'W', 'conveyor', 'R', 'X'];
+const UPGRADE_ORDER = ['drill', 'bat1', 'gen1', 'hover', 'scanner', 'bat2', 'gen2', 'bat3'];
 const ROBOT_PLAN = [['scrap', 1], ['haul', 1], ['repair', 1], ['crystal', 1], ['scrap', 2], ['haul', 2],
   ['crystal', 2], ['haul', 3], ['repair', 2], ['scrap', 3], ['haul', 4], ['crystal', 3], ['repair', 3],
-  ['haul', 5], ['crystal', 4], ['repair', 4], ['haul', 6], ['scrap', 4], ['repair', 5]];
+  ['haul', 5], ['crystal', 4], ['repair', 4], ['haul', 6], ['scrap', 4], ['repair', 5], ['haul', 7],
+  ['crystal', 5], ['scrap', 5], ['haul', 8], ['repair', 6], ['crystal', 6], ['haul', 9], ['scrap', 6], ['haul', 10]];
 
 function facOf(s, ch) { return s.facilities.find((f) => f.ch === ch); }
 function depAt(s, x, y) { return s.deposits[s.depAt[y * s.W + x]]; }
@@ -138,7 +143,9 @@ function manageEconomy(s, log, cfg) {
   for (const [role, n] of cfg.robotPlan) {
     if (G.roleCount(s, role) >= n) continue;
     if (role === 'crystal' && !s.deposits.some((d) => d.kind === 'crystal' && d.connected)) continue;
-    if (!idle && G.robotTotal(s) >= G.powerCap(s)) return;
+    // only run what the generators can carry (cfg.overbuild > 1 deliberately browns out)
+    const draw = MD.BAL.upkeep[role];
+    if (G.demand(s) + draw > G.supply(s) * (cfg.overbuild || 1)) return;
     const r = G.requestRole(s, role);
     if (r.ok) log((r.how === 'assign' ? 'assign ' : 'build ') + role);
     return;
@@ -156,6 +163,10 @@ function rebalance(s, log) {
   if (!G.roleCount(s, 'repair') && s.facilities.some((f) => f.state === 'restoring')) need.push('repair');
   if (!need.length) return false;
   const counts = ['scrap', 'crystal', 'haul', 'repair', 'idle'].map((r) => [r, G.roleCount(s, r)]).filter(([r, n]) => n > 1 || r === 'idle' && n > 0);
+  // nothing spare: borrow the only robot of a role that is not needed right now
+  if (!counts.length) {
+    for (const r of ['repair', 'haul', 'crystal', 'scrap']) if (need.indexOf(r) < 0 && G.roleCount(s, r)) { counts.push([r, 1]); break; }
+  }
   counts.sort((a, b) => b[1] - a[1]);
   if (!counts.length) return false;
   G.releaseRole(s, counts[0][0]);
@@ -187,8 +198,7 @@ function driveExplorer(s, cfg) {
     if (edge >= 0) {
       // our cable reaches the goal but the power does not: put a relay tower at the live edge
       if (G.relayCheck(s, edge).ok) {
-        if (e.y * s.W + e.x === edge) G.buildRelay(s);
-        else G.cmdMoveTo(s, edge % s.W, (edge / s.W) | 0);
+        G.buildRelay(s, edge);
         return;
       }
       // no scrap for a relay: lay a shorter line from where the power is still strong
@@ -229,6 +239,7 @@ function play(opts) {
     econT += dt;
     if (econT > 0.5) { econT = 0; manageEconomy(s, log, opts.cfg); }
     G.update(s, dt);
+    if (opts.onTick) opts.onTick(s, dt);
     for (const ev of s.events) {
       if (ev.type === 'restored') marks.push([s.time, s.facilities[ev.fac].name]);
       if (ev.type === 'upgrade') marks.push([s.time, 'UP ' + ev.id]);
@@ -239,8 +250,8 @@ function play(opts) {
   return { s, marks };
 }
 
-MD.Bot = { play, driveExplorer, manageEconomy, DEFAULT_CFG };
-if (typeof module !== 'undefined') module.exports = { play, driveExplorer, manageEconomy, DEFAULT_CFG };
+MD.Bot = { play, driveExplorer, manageEconomy, DEFAULT_CFG, GOALS, RESTORE_ORDER, UPGRADE_ORDER, ROBOT_PLAN };
+if (typeof module !== 'undefined') module.exports = MD.Bot;
 
 if (typeof require !== 'undefined' && require.main === module) {
   const { s, marks } = play({ verbose: process.argv.includes('-v') });

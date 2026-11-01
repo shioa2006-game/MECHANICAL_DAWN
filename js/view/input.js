@@ -23,7 +23,7 @@
       if (d) { e.preventDefault(); H.step(d[0], d[1], e.repeat); return; }
       switch (e.code) {
         case 'KeyR': H.returnHome(); break;
-        case 'KeyB': H.buildRelay(); break;
+        case 'KeyB': H.toggleRelayMode(); break;
         case 'Space': e.preventDefault(); H.centerExplorer(); break;
         case 'KeyQ': case 'Minus': case 'NumpadSubtract': H.zoom(-1); break;
         case 'KeyE': case 'Equal': case 'NumpadAdd': case 'Semicolon': H.zoom(1); break;

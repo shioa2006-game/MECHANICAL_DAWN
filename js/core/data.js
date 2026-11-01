@@ -15,18 +15,19 @@
      S  scrap heap    C  crystal vein    <  old conveyor (moves west)
      D  dock (base)   F  robot factory   R  radio tower   W  depot
      1 2 3  substations                  X  central reactor
+     G H J K  small generators
   */
   MD.MAP = [
     '################################################',
     '#.c................?.~~........................#',
-    '#.#####.#####o######.~~.####=.....?....o=#####.#',
-    '#o#####.#####.##22##.~~o####l...........=33###.#',
+    '#.#####.HH###o######.~~.####=.....?....o=#####.#',
+    '#o#####.HH###.##22##.~~o####l...........=33###.#',
     '#.##C##.#####.##22##.~~.###C=.~~~~~~~~~.=33###o#',
     '#....................~~.####=.~.XXXXX.~.l#####.#',
     '#.=l=====L=x===l===l.~~.####=.~cXXXXX.~.=#####.#',
     '#.##.##.##S##.######.~~.r+r.=.~.XXXXX.~.x......#',
-    '#z##+##.#####.######o~~.####l.~.XXXXXc~.=#####.#',
-    '#.#####o#####.######.~~.####=.~.XXXXX.~.=#####.#',
+    '#z##+##.#####.######o~~.####l.~.XXXXXc~.=##KK#.#',
+    '#.#####o#####.######.~~.####=.~.XXXXX.~.=##KK#.#',
     '#....................~~.####=.~~~~~~~~~.LS####z#',
     '#~~~~~~~~~~~~~~~~~~~~~~.####l...........=#####.#',
     '#~~~~~~~~~~~~~~~~~~~~~~.####=.o.........=#####.#',
@@ -39,8 +40,8 @@
     '#.####..####FFF#.####.##c.#.#####.WW<<<<<<<<<C.#',
     '#........o.....o..........r....................#',
     '#..........o...=l=L=x==l=lr....................#',
-    '#o####o.########.####.###.#.#####.#####o######o#',
-    '#.####?.########.####.###.#.#####.#####.######.#',
+    '#o#GG#o.########.####.###.#.#####.#####o##JJ##o#',
+    '#.#GG#?.########.####.###.#.#####.#####.##JJ##.#',
     '#...........o.......o....or==l===l=x=L===l===l=#',
     '#.#DDD.o########.S###.###.#.S####.#####.#11###.#',
     '#.#DDD..########.####.###.#.#####.#####.#11###.#',
@@ -67,10 +68,10 @@
     crystalPile: 2,
     rubbleScrap: 1,
     dockTrickle: 10,        // seconds per free scrap from the dock recycler (anti soft-lock)
-    robotCost: { scrap: 8 },
+    robotCost: { scrap: 6 },
     robotBuildTime: 2.2,
     robotSpeed: 5.0,        // tiles per second
-    mineTime: { scrap: 2.1, crystal: 3.2 }, // seconds per unit
+    mineTime: { scrap: 1.4, crystal: 4.2 }, // seconds per unit
     haulCap: 5,
     loadTime: 0.35,
     repairRate: 1.0,        // work per second
@@ -81,8 +82,12 @@
     conveyorInterval: 1.1,
     conveyorSpeed: 1.7,
     cellBonus: 1,
-    relayReach: 12,         // tiles of new cable a relay tower pushes power through (see FAC reach)
-    relayCost: 10, relayStep: 4, // scrap for the first relay tower, + per tower already built
+    relayReach: 12,
+    upkeep: { scrap: 1, crystal: 1, haul: 1, repair: 2, idle: 0 }, // power each robot role draws
+    relayUpkeep: 1,
+    conveyorUpkeep: 2,
+    tripTime: 10,           // seconds the whole grid stays dark after an overdraw on a live floor         // tiles of new cable a relay tower pushes power through (see FAC reach)
+    relayCost: 8, relayStep: 4, // scrap for the first relay tower, + per tower already built
     hazardRate: 0.18,       // chance for an eligible street tile to be a live floor
     hazardSafeRadius: 6,    // no live floors this close to the dock (Manhattan)
     hazardDrain: 3,         // extra battery a live floor takes
@@ -92,15 +97,15 @@
   // Facilities keyed by their map character.
   MD.FAC = {
     D: {
-      kind: 'dock', name: '基地ドック', w: 3, h: 3, startActive: true, power: 2, reach: 16, dropoff: true,
+      kind: 'dock', name: '基地ドック', w: 3, h: 3, startActive: true, power: 3, reach: 16, dropoff: true,
       desc: '探索機ホタルの充電基地。資源の保管庫でもある。',
-      effect: '帰還すると充電 / 資源の荷下ろし先 / 送電16マス',
+      effect: '帰還すると充電 / 資源の荷下ろし先 / 発電⚡3 / 送電16マス',
     },
     F: {
-      kind: 'factory', name: 'ロボット工場', cost: { scrap: 10 }, work: 0, power: 3, pts: 10,
+      kind: 'factory', name: 'ロボット工場', cost: { scrap: 10 }, work: 0, pts: 10,
       light: { sw: 0.45 }, beaconAtStart: true,
       desc: '止まったままの製造ライン。救難信号を出し続けている。',
-      effect: 'ロボットの製造が可能に / 電力+3 / 休眠ロボ1体が目覚める',
+      effect: 'ロボットの製造が可能に / 休眠ロボ1体が目覚める',
     },
     R: {
       kind: 'radar', name: '電波塔', cost: { scrap: 12 }, work: 6, pts: 6, reveal: 14,
@@ -115,25 +120,49 @@
       effect: '運搬ロボの荷下ろし先になる（運搬距離が短縮）',
     },
     '1': {
-      kind: 'substation', name: '第1変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
+      kind: 'substation', name: '第1変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 6, battery: 2, reach: 14, pts: 12,
       light: { ind: 0.65 }, music: 1,
       desc: '工業区へ電力を配っていた変電所。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 工業区が点灯',
+      effect: '発電⚡+6 / 出撃バッテリー+2 / 送電14マスの電源 / 工業区が点灯',
     },
     '2': {
-      kind: 'substation', name: '第2変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
+      kind: 'substation', name: '第2変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 6, battery: 2, reach: 14, pts: 12,
       light: { nw: 0.85 }, music: 1,
       desc: '運河の向こう、北西区の変電所。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 北西区が点灯',
+      effect: '発電⚡+6 / 出撃バッテリー+2 / 送電14マスの電源 / 北西区が点灯',
     },
     '3': {
-      kind: 'substation', name: '第3変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 3, battery: 2, reach: 14, pts: 12,
+      kind: 'substation', name: '第3変電所', cost: { scrap: 20, crystal: 10 }, work: 12, power: 6, battery: 2, reach: 14, pts: 12,
       light: { core: 0.5 }, music: 1,
       desc: '中枢区の変電所。中央動力炉への送電を担う。',
-      effect: '電力+3（ロボット枠） / 出撃バッテリー+2 / 送電14マスの電源 / 中枢区が点灯',
+      effect: '発電⚡+6 / 出撃バッテリー+2 / 送電14マスの電源 / 中枢区が点灯',
+    },
+    G: {
+      kind: 'generator', name: '西の発電機', cost: { scrap: 12 }, work: 0, power: 3, pts: 5,
+      light: { sw: 0.2 },
+      desc: '住宅街の非常用発電機。小さいが、基地のすぐ近くにある。',
+      effect: '発電⚡+3',
+    },
+    H: {
+      kind: 'generator', name: '北西の発電機', cost: { scrap: 12 }, work: 0, power: 3, pts: 5,
+      light: { nw: 0.2 },
+      desc: '運河の向こう、北西区の発電機。',
+      effect: '発電⚡+3',
+    },
+    J: {
+      kind: 'generator', name: '東の発電機', cost: { scrap: 12 }, work: 0, power: 3, pts: 5,
+      light: { ind: 0.2 },
+      desc: '工業区の自家発電機。周りの道は漏電がひどい。',
+      effect: '発電⚡+3',
+    },
+    K: {
+      kind: 'generator', name: '北東の発電機', cost: { scrap: 12 }, work: 0, power: 3, pts: 5,
+      light: { core: 0.15 },
+      desc: '中枢区の外れに残る発電機。',
+      effect: '発電⚡+3',
     },
     X: {
-      kind: 'reactor', name: '中央動力炉', cost: { scrap: 30, crystal: 40 }, work: 20, pts: 20,
+      kind: 'reactor', name: '中央動力炉', cost: { scrap: 30, crystal: 50 }, work: 20, pts: 20,
       requires: ['1', '2', '3'], light: { core: 0.5 },
       desc: '都市のすべてを動かしていた心臓。冷却水路に囲まれている。',
       effect: '再起動すると、都市に夜明けが訪れる',
@@ -148,11 +177,15 @@
   };
 
   MD.UPGRADES = [
-    { id: 'bat1', name: 'バッテリー増設 I', icon: 'bat', cost: { scrap: 10 }, battery: 3,
+    { id: 'gen1', name: '発電効率 I', icon: 'gen', cost: { crystal: 12 }, genBonus: 1, city: true,
+      desc: '稼働中の発電所すべて（基地・発電機・変電所）の発電 +1⚡' },
+    { id: 'gen2', name: '発電効率 II', icon: 'gen', cost: { scrap: 10, crystal: 40 }, genBonus: 1, requires: 'gen1', city: true,
+      desc: '稼働中の発電所すべての発電 さらに +1⚡' },
+    { id: 'bat1', name: 'バッテリー増設 I', icon: 'bat', cost: { scrap: 8 }, battery: 3,
       desc: '1回の出撃で進める距離 +3' },
     { id: 'scanner', name: '広域スキャナ', icon: 'scan', cost: { scrap: 12 },
       desc: '視界が広がる。地中に埋まった古い送電線と、霧の中の資源が見えるようになる' },
-    { id: 'drill', name: 'ドリルアーム', icon: 'drill', cost: { scrap: 16 },
+    { id: 'drill', name: 'ドリルアーム', icon: 'drill', cost: { scrap: 12 },
       desc: '瓦礫を砕いて進める（1マスにつきバッテリー2）。砕いた跡はケーブルが通る道になる' },
     { id: 'hover', name: 'ホバー脚', icon: 'hover', cost: { scrap: 18, crystal: 10 },
       desc: '冷却水路の上を進める。敷いたケーブルは橋になり、ロボットも渡れる' },

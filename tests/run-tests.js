@@ -165,7 +165,7 @@ function setupFactory() {
   walk(s, [[5, 26], [6, 26], ...line(6, 26, 6, 20), ...line(6, 20, 12, 20)]);
   return s;
 }
-test('factory needs connection and scrap, then wakes a robot and adds power', () => {
+test('factory needs connection and scrap, then wakes a robot', () => {
   const s = fresh();
   const F = fac(s, 'F');
   ok(!G.orderRestore(s, F.id).ok, 'cannot restore unconnected');
@@ -175,7 +175,7 @@ test('factory needs connection and scrap, then wakes a robot and adds power', ()
   s2.res.scrap = 10;
   ok(G.orderRestore(s2, F2.id).ok);
   eq(F2.state, 'active'); eq(s2.res.scrap, 0);
-  eq(G.powerCap(s2), 5); eq(s2.robots.length, 1); eq(s2.robots[0].role, 'idle');
+  eq(G.supply(s2), MD.FAC.D.power, 'the factory makes no power itself'); eq(s2.robots.length, 1); eq(s2.robots[0].role, 'idle');
 });
 test('miner + hauler deliver scrap to the dock along the grid', () => {
   const s = setupFactory();
@@ -223,8 +223,8 @@ test('repair robot restores a facility with work over time', () => {
   G.orderRestore(s, fac(s, 'F').id);
   walk(s, [...line(12, 20, 7, 20), ...line(7, 20, 7, 13)]);
   G.cmdReturn(s); run(s, 2);
+  ok(G.buildRelay(s, idx(s, 7, 13)).ok, 'relay at the edge of the dock reach');
   G.cmdMoveTo(s, 7, 13); run(s, 3);
-  ok(G.buildRelay(s).ok, 'relay at the edge of the dock reach');
   walk(s, line(7, 13, 17, 13)); // radar at (17,14)
   const R = fac(s, 'R');
   ok(R.connected);
@@ -234,15 +234,52 @@ test('repair robot restores a facility with work over time', () => {
   run(s, 30);
   eq(R.state, 'active');
 });
-test('robot cap is limited by power; substations raise it', () => {
+test('robots draw power by role; more than the supply slows the whole city', () => {
   const s = setupFactory();
   s.res.scrap = 999;
   G.orderRestore(s, fac(s, 'F').id);
-  for (let k = 0; k < 6; k++) G.requestRole(s, 'haul');
-  eq(G.robotTotal(s), 5);
+  G.requestRole(s, 'scrap'); G.requestRole(s, 'repair');
+  run(s, 6);
+  eq(G.demand(s), BAL.upkeep.scrap + BAL.upkeep.repair);
+  eq(G.supply(s), 3); eq(s.sat, 1);
+  for (let k = 0; k < 3; k++) ok(G.requestRole(s, 'haul').ok, 'no hard robot cap');
+  run(s, 40);
+  eq(G.demand(s), 6);
+  eq(G.coverage(s), 0.5); ok(Math.abs(s.sat - 0.25) < 1e-9, 'speed falls with the square of the coverage');
+  G.releaseRole(s, 'haul');
+  eq(G.demand(s), 5, 'an idle robot draws nothing');
+});
+test('brownout slows robot work in proportion to the speed factor', () => {
+  const mk = (extra) => {
+    const s = setupFactory();
+    s.res.scrap = 999;
+    G.orderRestore(s, fac(s, 'F').id);
+    walk(s, [...line(12, 20, 7, 20), [6, 20], [6, 19], [6, 18]]); // heap (5,18)
+    G.requestRole(s, 'scrap');
+    for (let k = 0; k < extra; k++) G.requestRole(s, 'idle');
+    return s;
+  };
+  const a = mk(0);
+  run(a, 20);
+  const b = mk(0);
+  b.relays.push(idx(b, 7, 20), idx(b, 8, 20), idx(b, 9, 20), idx(b, 10, 20)); // 4 relays: demand 5 > supply 3
+  G.recomputeGrid(b, true);
+  run(b, 20);
+  const da = a.deposits[a.depAt[idx(a, 5, 18)]].mined, db = b.deposits[b.depAt[idx(b, 5, 18)]].mined;
+  ok(da > 0 && db < da * 0.6, 'mined ' + db + ' under brownout vs ' + da);
+});
+test('generators and substations add supply; generator efficiency adds to every source', () => {
+  const s = fresh();
+  eq(G.supply(s), MD.FAC.D.power);
+  const g = fac(s, 'G'); g.connected = true; s.res.scrap = 99;
+  ok(G.orderRestore(s, g.id).ok);
+  eq(g.state, 'active', 'generators start without repair work');
+  eq(G.supply(s), MD.FAC.D.power + MD.FAC.G.power);
   const sub = fac(s, '1'); sub.connected = true; G.activate(s, sub);
-  eq(G.powerCap(s), 8);
-  ok(G.requestRole(s, 'haul').ok);
+  eq(G.supply(s), MD.FAC.D.power + MD.FAC.G.power + MD.FAC['1'].power);
+  s.res.crystal = 99;
+  ok(G.buyUpgrade(s, 'gen1').ok);
+  eq(G.supply(s), MD.FAC.D.power + MD.FAC.G.power + MD.FAC['1'].power + 3);
 });
 test('"-" sends a robot back to idle and "+" reuses it without cost', () => {
   const s = setupFactory();
@@ -263,7 +300,8 @@ test('upgrades cost resources and change abilities', () => {
   ok(G.buyUpgrade(s, 'bat1').ok); eq(G.maxBattery(s), 13);
   ok(G.buyUpgrade(s, 'drill').ok); ok(G.exStepInfo(s, idx(s, 26, 20)).ok);
   ok(G.buyUpgrade(s, 'hover').ok); ok(G.exStepInfo(s, idx(s, 10, 12)).ok);
-  eq(s.res.scrap, 100 - 10 - 16 - MD.UPGRADES.find((u) => u.id === 'hover').cost.scrap);
+  const cost = (id) => MD.UPGRADES.find((u) => u.id === id).cost.scrap;
+  eq(s.res.scrap, 100 - cost('bat1') - cost('drill') - cost('hover'));
 });
 test('reactor requires all three substations', () => {
   const s = fresh();
@@ -324,6 +362,24 @@ test('overdrawing on a live floor burns out the provisional cable and drops the 
   ok(s.hzKnown[hz], 'the live floor stays known');
   eq(s.stats.recalls, 1);
 });
+test('an overdraw also trips the whole grid for a while', () => {
+  const s = setupFactory();
+  s.res.scrap = 30;
+  G.orderRestore(s, fac(s, 'F').id);
+  G.requestRole(s, 'haul');
+  run(s, 3);
+  G.cmdReturn(s); run(s, 2);
+  G.cmdMoveTo(s, 12, 20); run(s, 3);
+  s.hz[idx(s, 12, 21)] = 1;
+  s.ex.battery = 2;
+  walk(s, [[12, 21]]);
+  ok(s.tripT > 0, 'breakers out'); eq(s.sat, 0);
+  const r = s.robots[0], x0 = r.x, y0 = r.y;
+  run(s, 1);
+  ok(r.x === x0 && r.y === y0, 'robots stand still');
+  run(s, BAL.tripTime);
+  eq(s.tripT, 0); eq(s.sat, 1);
+});
 test('a known live floor is never stepped on without the battery for it', () => {
   const s = fresh();
   const j = idx(s, 6, 24); s.hz[j] = 1; s.hzKnown[j] = 1;
@@ -378,14 +434,16 @@ test('a relay tower restarts the reach; it must stand on live cable and costs mo
   const s = fresh();
   trailToRow13(s);
   s.res.scrap = 100;
-  G.cmdMoveTo(s, 10, 13); run(s, 3);
-  ok(!G.buildRelay(s).ok, 'not on a dead line');
-  G.cmdMoveTo(s, 9, 13); run(s, 3);
-  ok(G.buildRelay(s).ok);
+  ok(!G.buildRelay(s, idx(s, 10, 13)).ok, 'not on a dead line');
+  ok(!G.buildRelay(s, idx(s, 10, 14)).ok, 'not off the grid');
+  const gain = G.relayGain(s, idx(s, 9, 13));
+  ok(gain.indexOf(idx(s, 10, 13)) >= 0 && gain.indexOf(idx(s, 11, 13)) >= 0, 'preview lists the tiles that would come alive');
+  ok(G.buildRelay(s, idx(s, 9, 13)).ok, 'placed remotely, the explorer is elsewhere');
   eq(s.res.scrap, 100 - BAL.relayCost);
   eq(s.volt[idx(s, 10, 13)], BAL.relayReach - 1);
   ok(s.powered[idx(s, 11, 13)]);
-  ok(!G.buildRelay(s).ok, 'one per tile');
+  eq(G.demandParts(s).relay, BAL.relayUpkeep, 'relays draw power');
+  ok(!G.buildRelay(s, idx(s, 9, 13)).ok, 'one per tile');
   eq(G.relayCost(s).scrap, BAL.relayCost + BAL.relayStep);
 });
 test('old city lines carry power without loss', () => {

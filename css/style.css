@@ -127,6 +127,11 @@ button.mini { font-size: 12px; padding: 1px 6px; margin-left: 8px; }
 #tooltip .ng { color: #ffcc66; }
 #tooltip .warn { color: #ff9a6a; }
 #temp-num { color: #ffb347; font-size: 12px; margin-left: 6px; }
+#res-power.short b, #res-power.short small { color: #ff8a6a; }
+#res-power.trip b, #res-power.trip small { color: #ff5a4c; animation: blink 0.5s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+#btn-relay.on { background: #1d4a5a; border-color: #8ff8ff; color: #e8ffff; }
+.rn small { color: #8b90a8; font-size: 10px; margin-left: 4px; }
 #temp-num:empty { display: none; }
 
 /* ---------------------------------------------------------------- toasts / banner / log */

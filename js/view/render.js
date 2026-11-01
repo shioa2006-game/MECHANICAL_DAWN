@@ -274,6 +274,7 @@
 
   function visOn(s, i, now) {
     if (!s.powered[i]) return false;
+    if (s.tripT > 0) return Math.random() < (s.tripT < 1.2 ? 0.5 : 0.02); // breakers out: dark, sputtering back
     const t = fx.powerOn.get(i);
     return t == null || now >= t;
   }
@@ -394,7 +395,8 @@
       const pulse = 0.55 + 0.45 * Math.sin(now * 3.2 - d * 0.55);
       // the light fades out towards the end of a source's reach
       const reach = U.clamp(0.3 + s.volt[i] * 0.16, 0.3, 1);
-      c.globalAlpha = U.clamp((0.45 + 0.4 * pulse) * reach + flash, 0, 1);
+      const brown = 0.35 + 0.65 * (s.sat == null ? 1 : s.sat); // the grid dims when it is overloaded
+      c.globalAlpha = U.clamp((0.45 + 0.4 * pulse) * reach * brown + flash, 0, 1);
       const core = flash > 0.2 ? '#ffffff' : pc ? C.corePlayer : C.coreOld;
       const a = 7;
       px(c, X + a, Y + a, 1, 1, core);
@@ -588,6 +590,7 @@
       case 'radar': drawRadar(c, X, Y, W, H, now, emit, lv, f); break;
       case 'depot': drawDepot(c, X, Y, W, H, now, emit, lv, f); break;
       case 'substation': drawSubstation(c, X, Y, W, H, now, emit, lv, f); break;
+      case 'generator': drawGenerator(c, X, Y, W, H, now, emit, lv); break;
       case 'conveyor': drawConveyor(c, s, f, now, emit, lv); break;
       case 'reactor': drawReactor(c, X, Y, W, H, now, emit, lv, f); break;
     }
@@ -722,6 +725,30 @@
         c.fillStyle = '#e8fbff';
         for (let k = 0; k < 8; k++) { c.fillRect(ax, ay + ((Math.random() * 3) | 0) - 1, 1, 1); ax += 2; }
       }
+      c.globalAlpha = 1;
+    }
+  }
+
+  // Small generator: a flywheel housing with exhaust stacks; the rotor spins once it runs.
+  function drawGenerator(c, X, Y, W, H, now, emit, lv) {
+    if (!emit) {
+      px(c, X + 1, Y + 3, W - 2, H - 4, '#23262f');
+      px(c, X + 2, Y + 4, W - 4, 2, '#3c4150');
+      px(c, X + 4, Y + 1, 3, 6, '#3a3e4a'); px(c, X + 9, Y, 3, 7, '#3a3e4a');
+      disc(c, X + 20, Y + 18, 8, lv ? '#4a5266' : '#3a3f4c');
+      disc(c, X + 20, Y + 18, 5, '#1c1f28');
+      px(c, X + 3, Y + 14, 9, 12, lv ? '#4a5266' : '#3a3f4c');
+      for (let k = 0; k < 4; k++) px(c, X + 4, Y + 16 + k * 3, 7, 1, '#262a34');
+    } else if (lv) {
+      c.globalAlpha = lv;
+      const a = now * 6;
+      for (let k = 0; k < 3; k++) {
+        const ang = a + k * 2.094;
+        px(c, Math.round(X + 20 + Math.cos(ang) * 4), Math.round(Y + 18 + Math.sin(ang) * 4), 2, 2, '#ffe08a');
+      }
+      px(c, X + 19, Y + 17, 2, 2, '#fff2c0');
+      px(c, X + 5, Y + 15, 2, 2, Math.sin(now * 4) > 0 ? '#7dff9a' : '#2e8b4a');
+      px(c, X + 9, Y + 15, 2, 2, '#7dff9a');
       c.globalAlpha = 1;
     }
   }
@@ -1115,7 +1142,21 @@
 
   // ---------------------------------------------------------------- overlays: plan, hover, selection
 
+  function drawRelayPreview(c, s, view, now) {
+    const R = view.relay;
+    if (!R) return;
+    c.globalAlpha = 0.45 + 0.25 * Math.sin(now * 6);
+    for (const i of R.gain) px(c, (i % s.W) * TS + 3, ((i / s.W) | 0) * TS + 3, TS - 6, TS - 6, '#59dcff');
+    const X = (R.i % s.W) * TS, Y = ((R.i / s.W) | 0) * TS;
+    c.globalAlpha = 0.95;
+    c.strokeStyle = '#8ff8ff'; c.lineWidth = 1;
+    c.strokeRect(X + 0.5, Y + 0.5, TS - 1, TS - 1);
+    px(c, X + 7, Y + 2, 2, 11, '#8ff8ff'); px(c, X + 3, Y + 4, 10, 1, '#8ff8ff');
+    c.globalAlpha = 1;
+  }
+
   function drawPlan(c, s, view, now) {
+    drawRelayPreview(c, s, view, now);
     const plan = view.plan;
     if (!plan || !plan.path.length) return;
     let cost = 0;

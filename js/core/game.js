@@ -14,7 +14,7 @@
     const rows = MD.MAP, H = rows.length, W = rows[0].length, N = W * H;
     const fill = (v) => new Array(N).fill(v);
     const s = {
-      v: 2, W, H, time: 0, seed: opts.seed != null ? opts.seed : (Math.random() * 1e9) | 0,
+      v: 3, W, H, time: 0, seed: opts.seed != null ? opts.seed : (Math.random() * 1e9) | 0,
       tile: fill(T.BUILDING), old: fill(0), buried: fill(0), cable: fill(0),
       powered: fill(0), pdist: fill(-1), volt: fill(-99), revealed: fill(0),
       hz: fill(0), hzKnown: fill(0), hzN: fill(0), relays: [],
@@ -37,6 +37,7 @@
       logsRead: [],
       events: [],
       won: false, wonAt: 0,
+      sat: 1, tripT: 0,
     };
 
     const facBounds = {};
@@ -204,7 +205,32 @@
   G.maxBattery = (s) => BAL.startBattery + s.ex.batBonus + s.ex.cells * BAL.cellBonus +
     G.substations(s).reduce((a, f) => a + (f.state === 'active' ? MD.FAC[f.ch].battery : 0), 0);
 
-  G.powerCap = (s) => s.facilities.reduce((a, f) => a + ((f.state === 'active' && G.def(f).power) || 0), 0);
+  // ---- power economy: generation is a rate, not a stock. Everything that runs draws from it at
+  // once; when the draw exceeds the generation the whole city slows to supply / demand.
+  G.genBonus = (s) => (s.upgrades.gen1 ? 1 : 0) + (s.upgrades.gen2 ? 1 : 0);
+  G.supplyOf = (s, f) => (f.state === 'active' && G.def(f).power ? G.def(f).power + G.genBonus(s) : 0);
+  G.supply = (s) => s.facilities.reduce((a, f) => a + G.supplyOf(s, f), 0);
+  G.demandParts = function (s) {
+    const parts = { scrap: 0, crystal: 0, haul: 0, repair: 0, relay: 0, conveyor: 0 };
+    for (const r of s.robots) if (BAL.upkeep[r.role]) parts[r.role] += BAL.upkeep[r.role];
+    parts.relay = s.relays.length * BAL.relayUpkeep;
+    const c = s.conveyor && s.facilities[s.conveyor.fac];
+    if (c && c.state === 'active') parts.conveyor = BAL.conveyorUpkeep;
+    return parts;
+  };
+  G.demand = (s) => { const p = G.demandParts(s); let n = 0; for (const k in p) n += p[k]; return n; };
+  // Share of the demand the generators cover, and the work speed that follows from it: machines
+  // lose efficiency faster than the supply drops (speed = cover²), so running more than the grid
+  // carries is a net loss rather than a free way to queue work. 0 while the breakers are tripped.
+  G.coverage = function (s) {
+    const d = G.demand(s);
+    return d <= 0 ? 1 : Math.min(1, G.supply(s) / d);
+  };
+  G.satisfaction = function (s) {
+    if (s.tripT > 0) return 0;
+    const c = G.coverage(s);
+    return c * c;
+  };
   G.robotTotal = (s) => s.robots.filter((r) => r.role !== 'parade').length + s.buildQueue.length;
 
   G.neighborsOf = function (s, i) {
@@ -292,9 +318,8 @@
   G.sourceReach = (f) => (f.state === 'active' && G.def(f).reach) || 0;
   const lossOf = (s, i) => (s.old[i] === 1 ? 0 : 1);
 
-  G.recomputeGrid = function (s, silent) {
-    const W = s.W, N = W * s.H;
-    const prev = s.powered;
+  function computeVolt(s, relays) {
+    const N = s.W * s.H;
     const volt = new Array(N).fill(NO_VOLT);
     const seeds = [];
     const seed = (i, v) => {
@@ -305,7 +330,7 @@
       if (!r) continue;
       for (const t of f.tiles) for (const n of G.neighborsOf(s, t)) seed(n, r - lossOf(s, n));
     }
-    for (const r of s.relays) seed(r, BAL.relayReach);
+    for (const r of relays) seed(r, BAL.relayReach);
     const q = seeds.slice();
     for (let h = 0; h < q.length; h++) {
       const c = q[h];
@@ -315,6 +340,13 @@
         if (v > volt[n]) { volt[n] = v; q.push(n); }
       }
     }
+    return { volt, seeds };
+  }
+
+  G.recomputeGrid = function (s, silent) {
+    const W = s.W, N = W * s.H;
+    const prev = s.powered;
+    const { volt, seeds } = computeVolt(s, s.relays);
     const pw = new Array(N).fill(0), pd = new Array(N).fill(-1);
     for (let i = 0; i < N; i++) if (volt[i] >= 0) pw[i] = 1;
     // hop distance from the nearest source, only for the travelling-light animation
@@ -592,12 +624,15 @@
 
   // Overdrawn on a live floor: the provisional cable burns out and what was picked up
   // since the last anchor is dropped where it was found. What was seen stays known.
+  // The surge also trips the city's breakers: every robot stands still until they reset.
   function shortOut(s, i) {
     const e = s.ex;
     e.battery = 0;
     e.mode = 'shorted';
     e.shortT = 0;
     e.path = []; e.keyq = []; e.goal = null;
+    s.tripT = BAL.tripTime;
+    s.stats.trips = (s.stats.trips || 0) + 1;
     s.events.push({ type: 'short', x: i % s.W, y: (i / s.W) | 0, tiles: e.temp.slice() });
   }
 
@@ -741,12 +776,9 @@
           // found at the end of a provisional line: it heads for the base once the line holds
           s.reserve++;
           s.events.push({ type: 'rescueWait', x, y });
-        } else if (G.robotTotal(s) < G.powerCap(s)) {
+        } else {
           const r = MD.Robots.spawn(s, i, 'idle');
           s.events.push({ type: 'rescue', rid: r.id, x, y });
-        } else {
-          s.reserve++;
-          s.events.push({ type: 'rescueReserve', x, y });
         }
         break;
     }
@@ -865,7 +897,7 @@
   };
 
   G.releaseReserve = function (s) {
-    while (s.reserve > 0 && G.robotTotal(s) < G.powerCap(s)) {
+    while (s.reserve > 0) {
       const home = G.homeSpot(s);
       if (home < 0) break;
       s.reserve--;
@@ -951,12 +983,10 @@
   G.relayCost = (s) => ({ scrap: BAL.relayCost + BAL.relayStep * s.relays.length });
 
   G.relayCheck = function (s, i) {
-    if (i == null) i = s.ex.y * s.W + s.ex.x;
-    if (s.won) return { ok: false, why: '' };
-    if (s.ex.mode === 'returning' || s.ex.mode === 'shorted') return { ok: false, why: '移動中は置けない' };
+    if (s.won || i == null || i < 0) return { ok: false, why: '' };
     if (s.relays.indexOf(i) >= 0) return { ok: false, why: 'ここにはもう中継塔がある' };
     if (s.cable[i] === 2) return { ok: false, why: '仮設ケーブルの上には置けない（確定させてから）' };
-    if (!G.isConductive(s, i)) return { ok: false, why: '送電網の上に立って置く' };
+    if (!G.isConductive(s, i)) return { ok: false, why: '送電網（ケーブルか古い送電線）の上に置く' };
     if (!s.powered[i]) return { ok: false, why: 'ここは電気が届いていない（届いている所に置く）' };
     if (s.volt[i] >= BAL.relayReach) return { ok: false, why: '電気が十分に届いている（電圧の低い所に置こう）' };
     const cost = G.relayCost(s);
@@ -964,23 +994,27 @@
     return { ok: true, cost };
   };
 
-  G.buildRelay = function (s) {
-    const e = s.ex;
-    if (e.moving) return { ok: false, why: '移動中は置けない' };
-    const i = e.y * s.W + e.x;
+  G.buildRelay = function (s, i) {
     const chk = G.relayCheck(s, i);
     if (!chk.ok) return chk;
     U.pay(s.res, chk.cost);
     s.relays.push(i);
-    s.events.push({ type: 'relay', x: e.x, y: e.y, i });
+    s.events.push({ type: 'relay', x: i % s.W, y: (i / s.W) | 0, i });
     G.recomputeGrid(s);
     return { ok: true };
+  };
+
+  // Tiles that would newly receive power if a relay stood on tile i (placement preview).
+  G.relayGain = function (s, i) {
+    const v = computeVolt(s, s.relays.concat([i])).volt;
+    const out = [];
+    for (let k = 0; k < v.length; k++) if (v[k] >= 0 && !s.powered[k]) out.push(k);
+    return out;
   };
 
   G.buildRobot = function (s, role) {
     const F = G.factory(s);
     if (!F || F.state !== 'active') return { ok: false, why: 'ロボット工場が停止している' };
-    if (G.robotTotal(s) >= G.powerCap(s)) return { ok: false, why: '電力が足りない（変電所を復旧すると枠が増える）' };
     if (!U.canAfford(s.res, BAL.robotCost)) return { ok: false, why: 'スクラップが足りない（⚙' + BAL.robotCost.scrap + '）' };
     U.pay(s.res, BAL.robotCost);
     s.buildQueue.push({ role, t: 0 });
@@ -1046,10 +1080,15 @@
 
   G.update = function (s, dt) {
     s.time += dt;
+    if (s.tripT > 0) {
+      s.tripT -= dt;
+      if (s.tripT <= 0) { s.tripT = 0; s.events.push({ type: 'tripEnd' }); }
+    }
     updateExplorer(s, dt);
-    MD.Robots.update(s, dt);
+    s.sat = G.satisfaction(s); // after the explorer, so a short circuit stops the city this very tick
+    MD.Robots.update(s, dt, s.sat);
     // Dock recycler: a slow trickle that only runs when scrap is short, so the game can never soft-lock.
-    const floor = G.factory(s).state === 'active' ? BAL.robotCost.scrap : MD.FAC.F.cost.scrap;
+    const floor = G.factory(s).state === 'active' ? Math.max(BAL.robotCost.scrap, MD.FAC.G.cost.scrap) : MD.FAC.F.cost.scrap;
     if (s.res.scrap < floor) {
       s.trickleT += dt;
       if (s.trickleT >= BAL.dockTrickle) {
@@ -1096,7 +1135,7 @@
     }
     const subs = G.substations(s), active = subs.filter((f) => f.state === 'active').length;
     if (active < 3) {
-      let hint = '変電所を復旧すると電力（ロボット枠）とバッテリーが増える。';
+      let hint = '変電所を復旧すると発電とバッテリーが増え、そこから先へ電気が届く。';
       if (!s.upgrades.drill) hint = '瓦礫の向こうに工業区がある。ドリルアームがあれば進める。';
       else if (!s.upgrades.hover && subs.some((f) => f.state === 'active')) hint = '運河の向こうにも変電所がある。ホバー脚には結晶◆が必要。';
       const restoring = subs.find((f) => f.state === 'restoring');
